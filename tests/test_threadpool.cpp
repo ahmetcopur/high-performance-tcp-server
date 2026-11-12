@@ -33,7 +33,7 @@ TEST(ThreadPool, FutureCarriesException) {
         throw std::runtime_error("boom");
     });
 
-    EXPECT_THROW(result.get(), std::runtime_error);
+    EXPECT_THROW((void)result.get(), std::runtime_error);
 }
 
 TEST(ThreadPool, EnqueueAfterShutdownThrows) {
