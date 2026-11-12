@@ -6,9 +6,11 @@ Usage:
 """
 
 import os
+import resource
 import signal
 import socket
 import statistics
+import struct
 import subprocess
 import sys
 import threading
@@ -51,10 +53,24 @@ def cpu_seconds(pid):
     return seconds
 
 
-def start_server(*options):
+def try_echo(s, data):
+    # True if the server echoed data, False if it closed the connection.
+    try:
+        s.sendall(data)
+        return recv_exact(s, len(data)) == data
+    except (ConnectionResetError, BrokenPipeError):
+        return False
+
+
+def start_server(*options, fd_limit=None):
+    def limit_fds():
+        if fd_limit is not None:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))
+
     proc = subprocess.Popen(
         [SERVER, "--port", str(PORT), *options],
         stdout=subprocess.DEVNULL,
+        preexec_fn=limit_fds,
     )
     deadline = time.time() + 5
     while True:
@@ -70,9 +86,10 @@ def start_server(*options):
 
 class ServerTestCase(unittest.TestCase):
     OPTIONS = ("--workers", "4")
+    FD_LIMIT = None
 
     def setUp(self):
-        self.proc = start_server(*self.OPTIONS)
+        self.proc = start_server(*self.OPTIONS, fd_limit=self.FD_LIMIT)
 
     def tearDown(self):
         if self.proc.poll() is None:
@@ -153,6 +170,20 @@ class ServerTest(ServerTestCase):
         for _ in range(200):
             s = connect()
             s.sendall(b"x" * 1000)
+            s.close()
+        s = connect()
+        s.sendall(b"still alive")
+        self.assertEqual(recv_exact(s, 11), b"still alive")
+        s.close()
+
+    def test_survives_reset_burst(self):
+        # SO_LINGER with a zero timeout makes close() send RST instead of
+        # FIN. Some of these resets arrive before the server calls accept().
+        for _ in range(200):
+            s = connect()
+            s.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
             s.close()
         s = connect()
         s.sendall(b"still alive")
@@ -248,6 +279,58 @@ class ConnectionLimitTest(ServerTestCase):
             t.join()
 
         self.assertEqual(errors, [])
+
+
+class FdExhaustionTest(ServerTestCase):
+    # The server may open this many descriptors in total. The connection
+    # limit stays at its default, far above it, so descriptors run out
+    # first.
+    FD_LIMIT = 24
+
+    def test_sheds_connections_and_recovers(self):
+        socks = [connect() for _ in range(60)]
+        served = []
+        shed = []
+
+        for s in socks:
+            s.settimeout(2)
+            if try_echo(s, b"hi"):
+                served.append(s)
+            else:
+                shed.append(s)
+
+        self.assertGreater(len(served), 0)
+        self.assertLess(len(served), self.FD_LIMIT)
+        self.assertGreater(len(shed), 0)
+        self.assertIsNone(self.proc.poll())
+
+        # Still out of descriptors. The server must be idle, not spinning.
+        before = cpu_seconds(self.proc.pid)
+        time.sleep(2)
+        used = cpu_seconds(self.proc.pid) - before
+        self.assertLess(used, 0.5)
+
+        self.assertTrue(try_echo(served[0], b"ok"))
+
+        # A newcomer is turned away at once instead of being left to hang.
+        late = connect()
+        late.settimeout(2)
+        self.assertFalse(try_echo(late, b"late"))
+        late.close()
+
+        for s in socks:
+            s.close()
+
+        # The server frees descriptors as it notices each close.
+        deadline = time.time() + 5
+        while True:
+            s = connect()
+            recovered = try_echo(s, b"recovered")
+            s.close()
+            if recovered:
+                break
+            self.assertLess(time.time(), deadline)
+            time.sleep(0.05)
 
 
 if __name__ == "__main__":

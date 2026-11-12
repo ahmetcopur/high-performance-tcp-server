@@ -3,9 +3,11 @@
 #include "ThreadPool.h"
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <mutex>
 #include <poll.h>
@@ -20,6 +22,7 @@
 #include <unistd.h>
 
 constexpr int BUFFER_SIZE = 4096;
+constexpr int ACCEPT_RETRY_MS = 100;
 
 volatile std::sig_atomic_t running = 1;
 
@@ -128,6 +131,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Held in reserve. When the process runs out of descriptors, closing
+    // this one makes room to accept a pending connection and close it.
+    int spareFd = open("/dev/null", O_RDONLY);
+
+    if (spareFd < 0) {
+        perror("open /dev/null");
+        close(serverSocket);
+        return 1;
+    }
+
     // 3. Create Thread Pool and shared result queue
     std::mutex completionMutex;
     std::queue<Completion> completions;
@@ -143,6 +156,23 @@ int main(int argc, char** argv) {
     auto closeClient = [&](int fd) {
         close(fd);
         clients.erase(fd);
+    };
+
+    // Set when accept() fails for a reason that retrying at once cannot
+    // fix. The listening socket then sits out one poll() round.
+    bool acceptBackoff = false;
+
+    std::chrono::steady_clock::time_point lastAcceptLog;
+
+    // A flood of failing connections must not become a flood of log lines.
+    auto logAcceptError = [&](const char* message) {
+        auto now = std::chrono::steady_clock::now();
+
+        if (now - lastAcceptLog < std::chrono::seconds(1))
+            return;
+
+        lastAcceptLog = now;
+        std::cerr << "accept: " << message << '\n';
     };
 
     std::cout << "Listening on 127.0.0.1:" << config.port
@@ -188,7 +218,7 @@ int main(int argc, char** argv) {
         // keep returning for a socket we are not going to accept from.
         short listenEvents = 0;
 
-        if (clients.size() < maxConnections)
+        if (clients.size() < maxConnections && !acceptBackoff)
             listenEvents = POLLIN;
 
         fds.push_back({serverSocket, listenEvents, 0});
@@ -205,12 +235,15 @@ int main(int argc, char** argv) {
             fds.push_back({fd, events, 0});
         }
 
-        // 6. Sleep until a socket is ready or wake() is called
+        // 6. Sleep until a socket is ready or wake() is called. During an
+        // accept backoff, also wake up on a timer to try accept() again.
         int ready = poll(
             fds.data(),
             static_cast<nfds_t>(fds.size()),
-            -1
+            acceptBackoff ? ACCEPT_RETRY_MS : -1
         );
+
+        acceptBackoff = false;
 
         if (ready < 0) {
             if (errno == EINTR)
@@ -237,13 +270,43 @@ int main(int argc, char** argv) {
                     serverSocket, nullptr, nullptr
                 );
 
-                if (fd < 0) {
-                    if (errno == EINTR)
+                // Out of descriptors. On Linux the connection stays in
+                // the backlog and keeps the listening socket readable, so
+                // poll() would return at once, forever. Use the spare
+                // descriptor's slot to accept the connection and close it.
+                if (fd < 0 && (errno == EMFILE || errno == ENFILE)) {
+                    logAcceptError(
+                        "out of file descriptors, "
+                        "refusing new connections"
+                    );
+
+                    close(spareFd);
+
+                    fd = accept(serverSocket, nullptr, nullptr);
+                    int acceptErrno = errno;
+
+                    if (fd >= 0)
+                        close(fd);
+
+                    spareFd = open("/dev/null", O_RDONLY);
+
+                    if (fd >= 0)
                         continue;
 
-                    if (errno != EAGAIN &&
-                        errno != EWOULDBLOCK)
-                        perror("accept");
+                    errno = acceptErrno;
+                }
+
+                if (fd < 0) {
+                    if (errno == EINTR || errno == ECONNABORTED)
+                        continue;
+
+                    // Anything else that is not "queue empty" may leave
+                    // a connection in the backlog, so back off instead
+                    // of polling the listening socket again right away.
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                        logAcceptError(std::strerror(errno));
+                        acceptBackoff = true;
+                    }
 
                     break;
                 }
@@ -395,6 +458,7 @@ int main(int argc, char** argv) {
         close(fd);
 
     close(serverSocket);
+    close(spareFd);
 
     // Workers may still call wake(), so stop them before closing the pipe.
     pool.shutdown();
