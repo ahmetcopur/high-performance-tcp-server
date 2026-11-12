@@ -73,7 +73,8 @@ int main(int argc, char** argv) {
     if (!parseConfig(argc, argv, config, configError)) {
         std::cerr << configError << "\n"
                   << "Usage: " << argv[0]
-                  << " [--port N] [--workers N] [--backlog N]\n";
+                  << " [--port N] [--workers N]"
+                  << " [--max-connections N] [--backlog N]\n";
         return 1;
     }
 
@@ -136,6 +137,9 @@ int main(int argc, char** argv) {
     std::unordered_map<int, Client> clients;
     std::uint64_t nextId = 1;
 
+    const auto maxConnections =
+        static_cast<std::size_t>(config.maxConnections);
+
     auto closeClient = [&](int fd) {
         close(fd);
         clients.erase(fd);
@@ -179,7 +183,15 @@ int main(int argc, char** argv) {
         std::vector<pollfd> fds;
         fds.reserve(clients.size() + 2);
 
-        fds.push_back({serverSocket, POLLIN, 0});
+        // At the connection limit the listening socket is left out, so
+        // new connections wait in the kernel backlog and poll() does not
+        // keep returning for a socket we are not going to accept from.
+        short listenEvents = 0;
+
+        if (clients.size() < maxConnections)
+            listenEvents = POLLIN;
+
+        fds.push_back({serverSocket, listenEvents, 0});
         fds.push_back({wakePipe[0], POLLIN, 0});
 
         for (const auto& [fd, client] : clients) {
@@ -220,7 +232,7 @@ int main(int argc, char** argv) {
 
         // 7. Accept new connections
         if (fds[0].revents & POLLIN) {
-            while (true) {
+            while (clients.size() < maxConnections) {
                 int fd = accept(
                     serverSocket, nullptr, nullptr
                 );

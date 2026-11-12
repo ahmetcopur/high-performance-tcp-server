@@ -7,6 +7,7 @@
 struct Config {
     int port = 8080;
     int workers = 8;
+    int maxConnections = 10000;
     int backlog = SOMAXCONN;
 };
 

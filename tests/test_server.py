@@ -35,6 +35,22 @@ def recv_exact(s, n):
     return data
 
 
+def cpu_seconds(pid):
+    # User plus system CPU time the process has used since it started.
+    if os.path.exists(f"/proc/{pid}/stat"):
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+
+    out = subprocess.check_output(
+        ["ps", "-o", "time=", "-p", str(pid)], text=True
+    )
+    seconds = 0.0
+    for part in out.strip().split(":"):
+        seconds = seconds * 60 + float(part)
+    return seconds
+
+
 def start_server(*options):
     proc = subprocess.Popen(
         [SERVER, "--port", str(PORT), *options],
@@ -156,6 +172,82 @@ class ServerTest(ServerTestCase):
         self.proc.send_signal(signal.SIGINT)
         self.assertEqual(self.proc.wait(timeout=2), 0)
         idle.close()
+
+
+class ConnectionLimitTest(ServerTestCase):
+    LIMIT = 5
+    OPTIONS = ("--workers", "4", "--max-connections", str(LIMIT))
+
+    def fill_to_limit(self):
+        held = [connect() for _ in range(self.LIMIT)]
+        for s in held:
+            s.sendall(b"held")
+            self.assertEqual(recv_exact(s, 4), b"held")
+        return held
+
+    def test_limit_is_enforced_and_recovers(self):
+        held = self.fill_to_limit()
+
+        # The kernel completes the handshake on its own, so connect()
+        # succeeds. The server must leave this connection in the backlog.
+        extra = connect()
+        extra.sendall(b"extra")
+        extra.settimeout(0.5)
+        with self.assertRaises(socket.timeout):
+            extra.recv(5)
+
+        held[1].sendall(b"again")
+        self.assertEqual(recv_exact(held[1], 5), b"again")
+
+        held[0].close()
+        extra.settimeout(5)
+        self.assertEqual(recv_exact(extra, 5), b"extra")
+
+        extra.close()
+        for s in held[1:]:
+            s.close()
+
+    def test_no_cpu_spin_at_limit(self):
+        # A connection waiting in the backlog keeps the listening socket
+        # readable. Polling it without accepting would spin.
+        held = self.fill_to_limit()
+        waiting = connect()
+
+        before = cpu_seconds(self.proc.pid)
+        time.sleep(2)
+        used = cpu_seconds(self.proc.pid) - before
+        self.assertLess(used, 0.5)
+
+        waiting.close()
+        for s in held:
+            s.close()
+
+    def test_churn_above_limit(self):
+        # Ten clients at a time against a limit of five. Every request
+        # must still be answered once a slot frees up.
+        errors = []
+
+        def client(i):
+            try:
+                for r in range(30):
+                    message = f"c{i:02d}r{r:02d}".encode()
+                    s = connect()
+                    s.sendall(message)
+                    if recv_exact(s, len(message)) != message:
+                        raise AssertionError("wrong echo")
+                    s.close()
+            except Exception as e:
+                errors.append(repr(e))
+
+        threads = [
+            threading.Thread(target=client, args=(i,)) for i in range(10)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

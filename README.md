@@ -36,6 +36,7 @@ The default build type is `RelWithDebInfo`. Pick another one with
 | --- | --- | --- |
 | `--port N` | 8080 | TCP port on 127.0.0.1. |
 | `--workers N` | 8 | Worker threads that process requests. |
+| `--max-connections N` | 10000 | Connections served at once. Further ones wait in the backlog. |
 | `--backlog N` | `SOMAXCONN` | Listen backlog. The kernel may cap it. |
 
 The server stops on Ctrl+C or SIGTERM.

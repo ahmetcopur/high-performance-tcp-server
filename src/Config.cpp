@@ -36,6 +36,9 @@ bool parseConfig(int argc, const char* const* argv, Config& config,
         else if (name == "--workers") {
             target = &config.workers;
         }
+        else if (name == "--max-connections") {
+            target = &config.maxConnections;
+        }
         else if (name == "--backlog") {
             target = &config.backlog;
         }

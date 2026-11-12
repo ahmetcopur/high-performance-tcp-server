@@ -31,6 +31,7 @@ TEST(Config, DefaultsWhenNoArguments) {
 
     EXPECT_EQ(config.port, 8080);
     EXPECT_EQ(config.workers, 8);
+    EXPECT_EQ(config.maxConnections, 10000);
     EXPECT_EQ(config.backlog, SOMAXCONN);
 }
 
@@ -38,11 +39,13 @@ TEST(Config, ReadsEveryOption) {
     Config config;
     std::string error;
 
-    ASSERT_TRUE(parse({"--port", "9000", "--workers", "2", "--backlog", "64"},
+    ASSERT_TRUE(parse({"--port", "9000", "--workers", "2", "--max-connections",
+                       "50", "--backlog", "64"},
                       config, error));
 
     EXPECT_EQ(config.port, 9000);
     EXPECT_EQ(config.workers, 2);
+    EXPECT_EQ(config.maxConnections, 50);
     EXPECT_EQ(config.backlog, 64);
 }
 
@@ -69,6 +72,7 @@ TEST(Config, RejectsValuesOutOfRange) {
     EXPECT_TRUE(fails({"--port", "65536"}));
     EXPECT_TRUE(fails({"--workers", "0"}));
     EXPECT_TRUE(fails({"--workers", "-1"}));
+    EXPECT_TRUE(fails({"--max-connections", "0"}));
     EXPECT_TRUE(fails({"--backlog", "0"}));
 }
 
