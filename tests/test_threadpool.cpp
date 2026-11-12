@@ -12,7 +12,9 @@ TEST(ThreadPool, RunsEveryTaskBeforeDestructorReturns) {
         ThreadPool pool(4);
 
         for (int i = 0; i < 1000; ++i)
-            pool.enqueue([&count]() { ++count; });
+            pool.enqueue([&count]() {
+                ++count;
+            });
     }
 
     EXPECT_EQ(count, 1000);
@@ -21,7 +23,9 @@ TEST(ThreadPool, RunsEveryTaskBeforeDestructorReturns) {
 TEST(ThreadPool, FutureCarriesResult) {
     ThreadPool pool(2);
 
-    auto result = pool.enqueue([]() { return 42; });
+    auto result = pool.enqueue([]() {
+        return 42;
+    });
 
     EXPECT_EQ(result.get(), 42);
 }
