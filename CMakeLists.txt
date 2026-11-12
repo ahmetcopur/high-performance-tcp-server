@@ -28,6 +28,14 @@ if(ENABLE_ASAN)
                         -fno-sanitize-recover=undefined
                         -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
+
+    # On Linux, UBSan's vptr check opens a pipe to probe whether the
+    # object's memory is readable. With no descriptors free the probe
+    # fails and the check reports an error that is not there, which kills
+    # the server in the descriptor exhaustion test.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_compile_options(-fno-sanitize=vptr)
+    endif()
 elseif(ENABLE_TSAN)
     add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
     add_link_options(-fsanitize=thread)
