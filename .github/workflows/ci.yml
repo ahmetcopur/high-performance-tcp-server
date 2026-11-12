@@ -23,7 +23,7 @@ jobs:
             flags: -DCMAKE_BUILD_TYPE=Release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure
         run: cmake -B build -DWARNINGS_AS_ERRORS=ON ${{ matrix.config.flags }}
