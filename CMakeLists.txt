@@ -1,0 +1,69 @@
+cmake_minimum_required(VERSION 3.20...3.31)
+project(tcpserver LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
+        "Debug, Release, or RelWithDebInfo" FORCE)
+endif()
+
+option(WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(ENABLE_ASAN "Build with AddressSanitizer and UBSan" OFF)
+option(ENABLE_TSAN "Build with ThreadSanitizer" OFF)
+
+if(ENABLE_ASAN AND ENABLE_TSAN)
+    message(FATAL_ERROR
+        "ENABLE_ASAN and ENABLE_TSAN cannot be combined. Each runtime "
+        "replaces malloc and reserves its own shadow memory, so a binary "
+        "can only carry one of them.")
+endif()
+
+# Sanitizer flags are global so that GoogleTest is instrumented as well.
+# UBSan only prints by default, so make it abort like ASan does.
+if(ENABLE_ASAN)
+    add_compile_options(-fsanitize=address,undefined
+                        -fno-sanitize-recover=undefined
+                        -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+elseif(ENABLE_TSAN)
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+endif()
+
+find_package(Threads REQUIRED)
+
+# Warnings are attached to our own targets only, not to GoogleTest.
+add_library(tcpserver_warnings INTERFACE)
+target_compile_options(tcpserver_warnings INTERFACE
+    -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion)
+if(WARNINGS_AS_ERRORS)
+    target_compile_options(tcpserver_warnings INTERFACE -Werror)
+endif()
+
+# Header-only for now. Sources move in here during the module refactor.
+add_library(tcpserver INTERFACE)
+target_include_directories(tcpserver INTERFACE include)
+target_link_libraries(tcpserver INTERFACE Threads::Threads)
+
+add_executable(server src/main.cpp)
+target_link_libraries(server PRIVATE tcpserver tcpserver_warnings)
+
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+    add_test(NAME integration
+        COMMAND Python3::Interpreter
+                ${CMAKE_SOURCE_DIR}/tests/test_server.py
+                $<TARGET_FILE:server>)
+
+    # The tests stop the server with SIGKILL, so a TSan report would never
+    # reach the exit code. Fail on the report text instead.
+    set_tests_properties(integration PROPERTIES
+        TIMEOUT 120
+        FAIL_REGULAR_EXPRESSION
+        "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
+endif()
