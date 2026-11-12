@@ -53,6 +53,20 @@ target_link_libraries(server PRIVATE tcpserver tcpserver_warnings)
 
 include(CTest)
 if(BUILD_TESTING)
+    include(FetchContent)
+    FetchContent_Declare(googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.tar.gz
+        URL_HASH SHA256=65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c)
+    set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    include(GoogleTest)
+
+    add_executable(test_threadpool tests/test_threadpool.cpp)
+    target_link_libraries(test_threadpool PRIVATE
+        tcpserver tcpserver_warnings GTest::gtest_main)
+    gtest_discover_tests(test_threadpool)
+
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
     add_test(NAME integration
