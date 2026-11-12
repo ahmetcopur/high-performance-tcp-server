@@ -8,7 +8,7 @@ comparable.
 
 - [x] 0. Verify on macOS and set a baseline
 - [x] 1. Repository and build infrastructure
-- [ ] 2. Accept-path robustness and connection limits
+- [x] 2. Accept-path robustness and connection limits
 - [ ] 3. Binary protocol and per-connection buffering
 - [ ] 4. Connection lifecycle, half-close, and timeouts
 - [ ] 5. Graceful shutdown policy
@@ -28,6 +28,8 @@ comparable.
   - Homebrew clang 23.1.5 for sanitizer builds (see open issue 2).
 - **Linux VM:** Ubuntu 22.04, g++ 11.4, 4 cores. Used before this
   repository existed.
+- **Linux container:** Ubuntu 24.04 in Docker on the Mac (aarch64),
+  g++ 13.3.0, CMake 3.28.3, Python 3.12.3. Used for Linux-only checks.
 - **CI, `ubuntu-latest`:** GitHub-hosted Ubuntu 26.04, g++ 15.2.0.
 - **CI, `macos-latest`:** GitHub-hosted macOS 26 on arm64, Apple clang
   21.0.0.
@@ -91,6 +93,74 @@ Not verified:
   They work on the CI runner, which has a newer Xcode.
 - Repeated CI runs. One run per job is not evidence against flakiness.
 
+## Step 2: accept path and connection limits (2026-11-12)
+
+What changed: options are named (`--port`, `--workers`,
+`--max-connections`, `--backlog`) and parsed into a `Config` struct. At
+the connection limit the listening socket is left out of `poll()`. When
+descriptors run out, a spare descriptor is given up to accept and close
+the pending connection. Any other `accept()` failure that a retry cannot
+fix makes the listening socket sit out one `poll()` round, for 100 ms.
+
+Verified on the Mac, three `ctest` runs each, warnings as errors, no
+warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| Release | Apple clang 17 | 13 of 13 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 13 of 13 tests pass |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 13 of 13 tests pass |
+
+The 13 are seven `Config` cases, five `ThreadPool` cases, and the
+integration suite, which now has 14 tests (13 run on macOS, the
+half-close test is skipped).
+
+Verified in the Linux container, three `ctest` runs each of Release,
+Debug with `ENABLE_ASAN`, and Debug with `ENABLE_TSAN`: 13 of 13 pass,
+no warnings. All 14 integration tests run there, including the
+half-close test.
+
+Verified in CI, GitHub Actions run 43306747759 on commit `23a6a6f`: all
+six jobs pass with 13 of 13 tests and no warnings. Two earlier runs each
+had one failing Linux job, and both causes were outside the server:
+
+- **Ubuntu ASan+UBSan, commit `964e14f`.** UBSan's vptr check opens a
+  pipe every time it runs, to probe the object's memory. With no
+  descriptors free the probe fails, and the check reports an invalid
+  vptr or aborts. The check is now off on Linux (open issue 8).
+- **Ubuntu TSan, commit `a49c925`.** A race in the exhaustion test. The
+  readiness probe in `start_server()` could still hold a descriptor
+  while the 60 test connections arrived, and release it afterwards, so
+  a connection the test expected to be refused was served. Reproduced
+  in the container on one CPU: 2 failures in 60 runs, each with 16
+  connections served instead of 17. The test now connects until one
+  more is refused: 0 failures in 80 runs under the same conditions.
+
+The new tests fail without the fixes. Checked in the Linux container
+with the server limited to 24 descriptors and 60 clients connecting:
+
+| Server code | Result |
+| --- | --- |
+| Before the fix (commit `e1b9882`) | Exhaustion test times out. The server used 2.00 s of CPU in 2 s and wrote about 767,000 log lines. |
+| Limit checked only in the accept loop, listener still polled | `test_no_cpu_spin_at_limit` fails: 2.0 s of CPU in 2 s. |
+| Current | Both pass. One log line per second. |
+
+On macOS the code before the fix already passes the exhaustion test.
+There a failed `accept()` with `EMFILE` drops the pending connection: 43
+refused clients produced exactly 43 failures and no spin. The spin is a
+Linux behaviour.
+
+Not verified:
+
+- The 100 ms accept backoff. No test makes `accept()` fail in a way the
+  spare descriptor cannot fix. `ENFILE` (the system-wide table is full)
+  cannot be produced from a test.
+- That the `ECONNABORTED` branch runs. The reset-burst test may produce
+  it, but nothing confirms that it did.
+- The effect of `--backlog`. It is parsed and passed to `listen()`, and
+  no test observes the kernel queue.
+- The default limit of 10,000 connections at that scale.
+
 ## Open issues
 
 1. **Half-close is broken on macOS.** `poll()` on macOS reports
@@ -111,3 +181,15 @@ Not verified:
    from `.clang-format` output on about 126 lines because it is
    hand-wrapped near 60 columns. Reformat when it is split in step 6.
 5. **`.clang-format` is not enforced in CI.**
+6. **The default connection limit is above common descriptor limits.**
+   `--max-connections` defaults to 10,000, while `ulimit -n` is often
+   256 on macOS and 1,024 on Linux. With defaults, descriptors run out
+   first and new clients are closed instead of queued. The server does
+   not warn about this at startup and does not raise its own limit.
+7. **Clients waiting at the connection limit get no signal.** They sit
+   in the kernel backlog until a slot frees. Once the backlog is full
+   the kernel ignores further connection attempts.
+8. **UBSan's vptr check is off on Linux.** It needs a free descriptor
+   on every check, which the descriptor exhaustion test takes away. The
+   other undefined-behaviour checks and ASan are unaffected, and macOS
+   keeps the check.

@@ -41,6 +41,15 @@ The default build type is `RelWithDebInfo`. Pick another one with
 
 The server stops on Ctrl+C or SIGTERM.
 
+Two limits protect the accept path, and they behave differently:
+
+- **Connection limit reached:** the server stops accepting. New clients
+  connect, wait in the kernel backlog, and are served when a slot frees.
+- **File descriptors exhausted:** the server accepts each new connection
+  only to close it at once, so the client is turned away instead of
+  hanging. This happens first when `--max-connections` is higher than
+  `ulimit -n` allows.
+
 ## Build options
 
 | Option | Default | Effect |
@@ -64,8 +73,9 @@ another clang by adding, for example,
 ## Layout
 
 ```text
-include/   headers (ThreadPool.h)
-src/       main.cpp
-tests/     test_threadpool.cpp (GoogleTest), test_server.py (black-box)
+include/   Config.h, ThreadPool.h
+src/       main.cpp, Config.cpp
+tests/     test_config.cpp, test_threadpool.cpp (GoogleTest)
+           test_server.py (black-box, starts the real server)
 docs/      PROGRESS.md
 ```
