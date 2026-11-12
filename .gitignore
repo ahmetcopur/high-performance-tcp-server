@@ -1,0 +1,10 @@
+# Build output
+/build*/
+/server
+*.dSYM/
+
+# Python
+__pycache__/
+
+# macOS
+.DS_Store
