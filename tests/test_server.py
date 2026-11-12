@@ -35,27 +35,49 @@ def recv_exact(s, n):
     return data
 
 
-class ServerTest(unittest.TestCase):
+def start_server(*options):
+    proc = subprocess.Popen(
+        [SERVER, "--port", str(PORT), *options],
+        stdout=subprocess.DEVNULL,
+    )
+    deadline = time.time() + 5
+    while True:
+        try:
+            connect().close()
+            return proc
+        except OSError:
+            if time.time() > deadline:
+                proc.kill()
+                raise
+            time.sleep(0.02)
+
+
+class ServerTestCase(unittest.TestCase):
+    OPTIONS = ("--workers", "4")
+
     def setUp(self):
-        self.proc = subprocess.Popen(
-            [SERVER, str(PORT), "4"], stdout=subprocess.DEVNULL
-        )
-        deadline = time.time() + 5
-        while True:
-            try:
-                connect().close()
-                break
-            except OSError:
-                if time.time() > deadline:
-                    self.proc.kill()
-                    raise
-                time.sleep(0.02)
+        self.proc = start_server(*self.OPTIONS)
 
     def tearDown(self):
         if self.proc.poll() is None:
             self.proc.kill()
         self.proc.wait()
 
+
+class CommandLineTest(unittest.TestCase):
+    def test_invalid_option_exits_with_usage(self):
+        result = subprocess.run(
+            [SERVER, "--port", "not-a-number"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("invalid value for --port", result.stderr)
+        self.assertIn("Usage:", result.stderr)
+
+
+class ServerTest(ServerTestCase):
     def test_echo(self):
         s = connect()
         s.sendall(b"hello")

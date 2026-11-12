@@ -29,11 +29,16 @@ The default build type is `RelWithDebInfo`. Pick another one with
 ## Run
 
 ```bash
-./build/server [port] [workers]
+./build/server --port 8080 --workers 8
 ```
 
-Defaults are port 8080 and 8 workers. The server listens on 127.0.0.1 and
-stops on Ctrl+C or SIGTERM.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--port N` | 8080 | TCP port on 127.0.0.1. |
+| `--workers N` | 8 | Worker threads that process requests. |
+| `--backlog N` | `SOMAXCONN` | Listen backlog. The kernel may cap it. |
+
+The server stops on Ctrl+C or SIGTERM.
 
 ## Build options
 

@@ -43,10 +43,11 @@ if(WARNINGS_AS_ERRORS)
     target_compile_options(tcpserver_warnings INTERFACE -Werror)
 endif()
 
-# Header-only for now. Sources move in here during the module refactor.
-add_library(tcpserver INTERFACE)
-target_include_directories(tcpserver INTERFACE include)
-target_link_libraries(tcpserver INTERFACE Threads::Threads)
+add_library(tcpserver STATIC src/Config.cpp)
+target_include_directories(tcpserver PUBLIC include)
+target_link_libraries(tcpserver
+    PUBLIC Threads::Threads
+    PRIVATE tcpserver_warnings)
 
 add_executable(server src/main.cpp)
 target_link_libraries(server PRIVATE tcpserver tcpserver_warnings)
@@ -62,10 +63,12 @@ if(BUILD_TESTING)
     FetchContent_MakeAvailable(googletest)
     include(GoogleTest)
 
-    add_executable(test_threadpool tests/test_threadpool.cpp)
-    target_link_libraries(test_threadpool PRIVATE
-        tcpserver tcpserver_warnings GTest::gtest_main)
-    gtest_discover_tests(test_threadpool)
+    foreach(name test_config test_threadpool)
+        add_executable(${name} tests/${name}.cpp)
+        target_link_libraries(${name} PRIVATE
+            tcpserver tcpserver_warnings GTest::gtest_main)
+        gtest_discover_tests(${name})
+    endforeach()
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
 

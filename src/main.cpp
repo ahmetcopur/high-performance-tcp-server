@@ -1,11 +1,11 @@
 
+#include "Config.h"
 #include "ThreadPool.h"
 
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <iostream>
 #include <mutex>
 #include <poll.h>
@@ -19,8 +19,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-constexpr int DEFAULT_PORT = 8080;
-constexpr int DEFAULT_WORKERS = 8;
 constexpr int BUFFER_SIZE = 4096;
 
 volatile std::sig_atomic_t running = 1;
@@ -69,12 +67,13 @@ std::string processMessage(std::string message) {
 }
 
 int main(int argc, char** argv) {
-    // Usage: ./server [port] [workers]
-    int port = argc > 1 ? std::atoi(argv[1]) : DEFAULT_PORT;
-    int numWorkers = argc > 2 ? std::atoi(argv[2]) : DEFAULT_WORKERS;
+    Config config;
+    std::string configError;
 
-    if (port <= 0 || port > 65535 || numWorkers <= 0) {
-        std::cerr << "Usage: " << argv[0] << " [port] [workers]\n";
+    if (!parseConfig(argc, argv, config, configError)) {
+        std::cerr << configError << "\n"
+                  << "Usage: " << argv[0]
+                  << " [--port N] [--workers N] [--backlog N]\n";
         return 1;
     }
 
@@ -112,7 +111,7 @@ int main(int argc, char** argv) {
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = htons(static_cast<std::uint16_t>(port));
+    address.sin_port = htons(static_cast<std::uint16_t>(config.port));
 
     // 2. Configure server
     if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR,
@@ -121,7 +120,7 @@ int main(int argc, char** argv) {
         bind(serverSocket,
              reinterpret_cast<sockaddr*>(&address),
              sizeof(address)) < 0 ||
-        listen(serverSocket, 128) < 0) {
+        listen(serverSocket, config.backlog) < 0) {
 
         perror("server setup");
         close(serverSocket);
@@ -132,7 +131,7 @@ int main(int argc, char** argv) {
     std::mutex completionMutex;
     std::queue<Completion> completions;
 
-    ThreadPool pool(static_cast<std::size_t>(numWorkers));
+    ThreadPool pool(static_cast<std::size_t>(config.workers));
 
     std::unordered_map<int, Client> clients;
     std::uint64_t nextId = 1;
@@ -142,8 +141,8 @@ int main(int argc, char** argv) {
         clients.erase(fd);
     };
 
-    std::cout << "Listening on 127.0.0.1:" << port
-              << " with " << numWorkers
+    std::cout << "Listening on 127.0.0.1:" << config.port
+              << " with " << config.workers
               << " workers (Ctrl+C to stop)" << std::endl;
 
     // 4. Main event loop
