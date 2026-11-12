@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.config.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        config:
+          - name: Debug ASan+UBSan
+            flags: -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON
+          - name: Debug TSan
+            flags: -DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON
+          - name: Release
+            flags: -DCMAKE_BUILD_TYPE=Release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DWARNINGS_AS_ERRORS=ON ${{ matrix.config.flags }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
