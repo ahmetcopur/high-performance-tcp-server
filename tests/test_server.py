@@ -299,6 +299,18 @@ class FdExhaustionTest(ServerTestCase):
             else:
                 shed.append(s)
 
+        # The readiness probe in start_server may have held a descriptor
+        # during the burst and given it back afterwards. Keep connecting
+        # until one more is refused, so that none is free from here on.
+        while True:
+            s = connect()
+            s.settimeout(2)
+            socks.append(s)
+            if not try_echo(s, b"hi"):
+                break
+            served.append(s)
+            self.assertLess(len(served), self.FD_LIMIT)
+
         self.assertGreater(len(served), 0)
         self.assertLess(len(served), self.FD_LIMIT)
         self.assertGreater(len(shed), 0)
