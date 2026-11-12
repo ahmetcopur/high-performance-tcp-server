@@ -7,7 +7,7 @@ comparable.
 ## Steps
 
 - [x] 0. Verify on macOS and set a baseline
-- [x] 1. Repository and build infrastructure (CI not yet run, see below)
+- [x] 1. Repository and build infrastructure
 - [ ] 2. Accept-path robustness and connection limits
 - [ ] 3. Binary protocol and per-connection buffering
 - [ ] 4. Connection lifecycle, half-close, and timeouts
@@ -28,6 +28,9 @@ comparable.
   - Homebrew clang 23.1.5 for sanitizer builds (see open issue 2).
 - **Linux VM:** Ubuntu 22.04, g++ 11.4, 4 cores. Used before this
   repository existed.
+- **CI, `ubuntu-latest`:** GitHub-hosted Ubuntu 26.04, g++ 15.2.0.
+- **CI, `macos-latest`:** GitHub-hosted macOS 26 on arm64, Apple clang
+  21.0.0.
 
 ## Step 0: macOS baseline (2026-11-12)
 
@@ -69,13 +72,24 @@ throwaway copy, the TSan build's integration test failed on the report
 text. This matters because the tests stop the server with SIGKILL, so
 the sanitizer's exit code is never seen.
 
+Verified in CI, GitHub Actions run 43297991514 on commit `1bf2205`: all
+six jobs passed, each with 6 of 6 tests, warnings as errors, and no
+compiler warnings.
+
+| Runner | Debug ASan+UBSan | Debug TSan | Release |
+| --- | --- | --- | --- |
+| `ubuntu-latest` (g++ 15.2.0) | pass | pass | pass |
+| `macos-latest` (Apple clang 21.0.0) | pass | pass | pass |
+
+This is the first build of the repository on Linux, and the first time
+the sanitizers ran with Apple clang. The half-close test runs on the
+Linux jobs and is skipped on the macOS jobs.
+
 Not verified:
 
-- The GitHub Actions workflow has never run. There is no remote yet.
-- Nothing in this repository has been built on Linux. The stricter
-  warning set (`-Wpedantic -Wshadow -Wconversion -Wsign-conversion`) may
-  report things under g++ that clang does not.
-- Sanitizer builds with Apple clang (open issue 2).
+- Sanitizer builds with Apple clang on the Mac itself (open issue 2).
+  They work on the CI runner, which has a newer Xcode.
+- Repeated CI runs. One run per job is not evidence against flakiness.
 
 ## Open issues
 
