@@ -27,6 +27,7 @@ bool parseConfig(int argc, const char* const* argv, Config& config,
     for (int i = 1; i < argc; i += 2) {
         std::string name = argv[i];
         int* target = nullptr;
+        int min = 1;
         int max = INT_MAX;
 
         if (name == "--port") {
@@ -42,6 +43,13 @@ bool parseConfig(int argc, const char* const* argv, Config& config,
         else if (name == "--backlog") {
             target = &config.backlog;
         }
+        else if (name == "--max-frame") {
+            target = &config.maxFrame;
+            min = 8;
+        }
+        else if (name == "--output-high-water") {
+            target = &config.outputHighWater;
+        }
         else {
             error = "unknown option: " + name;
             return false;
@@ -52,7 +60,7 @@ bool parseConfig(int argc, const char* const* argv, Config& config,
             return false;
         }
 
-        if (!parseInt(argv[i + 1], 1, max, *target)) {
+        if (!parseInt(argv[i + 1], min, max, *target)) {
             error = "invalid value for " + name + ": " + argv[i + 1];
             return false;
         }

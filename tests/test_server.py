@@ -1,5 +1,6 @@
 """
-Black-box regression tests for the echo server.
+Black-box tests for the server. They start the real binary and talk to
+it over TCP with the protocol in docs/protocol.md.
 
 Usage:
     python3 tests/test_server.py path/to/server
@@ -17,6 +18,9 @@ import threading
 import time
 import unittest
 
+import protocol
+from protocol import COMPUTE, ECHO, ERROR, PING, RESPONSE, STATS
+
 SERVER = "./server"
 PORT = 18080
 
@@ -25,16 +29,6 @@ def connect():
     s = socket.create_connection(("127.0.0.1", PORT), timeout=5)
     s.settimeout(5)
     return s
-
-
-def recv_exact(s, n):
-    data = b""
-    while len(data) < n:
-        chunk = s.recv(n - len(data))
-        if not chunk:
-            break
-        data += chunk
-    return data
 
 
 def cpu_seconds(pid):
@@ -53,12 +47,20 @@ def cpu_seconds(pid):
     return seconds
 
 
-def try_echo(s, data):
+def rss_bytes(pid):
+    # Resident memory of the process. ps reports it in KiB.
+    out = subprocess.check_output(
+        ["ps", "-o", "rss=", "-p", str(pid)], text=True
+    )
+    return int(out.strip()) * 1024
+
+
+def try_echo(s, data, request_id=1):
     # True if the server echoed data, False if it closed the connection.
     try:
-        s.sendall(data)
-        return recv_exact(s, len(data)) == data
-    except (ConnectionResetError, BrokenPipeError):
+        reply = protocol.request(s, ECHO, request_id, data)
+        return reply == (ECHO | RESPONSE, request_id, data)
+    except (ConnectionResetError, BrokenPipeError, EOFError):
         return False
 
 
@@ -96,6 +98,17 @@ class ServerTestCase(unittest.TestCase):
             self.proc.kill()
         self.proc.wait()
 
+    def assert_echo(self, s, data, request_id=1):
+        self.assertEqual(
+            protocol.request(s, ECHO, request_id, data),
+            (ECHO | RESPONSE, request_id, data),
+        )
+
+    def assert_error(self, frame, code, request_id):
+        self.assertEqual(frame[0], ERROR)
+        self.assertEqual(frame[1], request_id)
+        self.assertEqual(protocol.error_code(frame), code)
+
 
 class CommandLineTest(unittest.TestCase):
     def test_invalid_option_exits_with_usage(self):
@@ -113,8 +126,20 @@ class CommandLineTest(unittest.TestCase):
 class ServerTest(ServerTestCase):
     def test_echo(self):
         s = connect()
-        s.sendall(b"hello")
-        self.assertEqual(recv_exact(s, 5), b"hello")
+        self.assert_echo(s, b"hello", request_id=7)
+        self.assert_echo(s, b"", request_id=8)
+        self.assert_echo(s, bytes(range(256)), request_id=0xFFFFFFFF)
+        s.close()
+
+    def test_ping(self):
+        s = connect()
+        self.assertEqual(
+            protocol.request(s, PING, 5), (PING | RESPONSE, 5, b"")
+        )
+        # A payload on PING is ignored, not echoed.
+        self.assertEqual(
+            protocol.request(s, PING, 6, b"ignored"), (PING | RESPONSE, 6, b"")
+        )
         s.close()
 
     def test_single_client_latency(self):
@@ -122,58 +147,262 @@ class ServerTest(ServerTestCase):
         # With the old 50 ms poll timeout the median here was about 52 ms.
         s = connect()
         latencies = []
-        for _ in range(200):
+        for i in range(200):
             start = time.perf_counter()
-            s.sendall(b"ping")
-            self.assertEqual(recv_exact(s, 4), b"ping")
+            self.assert_echo(s, b"ping", request_id=i)
             latencies.append((time.perf_counter() - start) * 1000)
         s.close()
         self.assertLess(statistics.median(latencies), 10)
 
-    def test_message_split_across_sends(self):
+    def test_frame_split_across_sends(self):
+        frame = protocol.encode(ECHO, 3, b"abcdef")
         s = connect()
-        s.sendall(b"abc")
+        s.sendall(frame[:7])
         time.sleep(0.1)
-        s.sendall(b"def")
-        self.assertEqual(recv_exact(s, 6), b"abcdef")
+        s.sendall(frame[7:])
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 3, b"abcdef"))
         s.close()
 
-    def test_large_payload(self):
-        # 4 MiB does not fit in the socket buffers, so the server has to
-        # handle partial writes and stop reading while output is pending.
-        payload = os.urandom(4 * 1024 * 1024)
+    def test_frame_one_byte_at_a_time(self):
+        frame = protocol.encode(ECHO, 4, b"slow")
+        s = connect()
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        for i in range(len(frame)):
+            s.sendall(frame[i : i + 1])
+            time.sleep(0.005)
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 4, b"slow"))
+        s.close()
+
+    def test_frames_merged_in_one_send(self):
+        # Two whole frames and the first half of a third in one write.
+        third = protocol.encode(ECHO, 3, b"third")
+        s = connect()
+        s.sendall(
+            protocol.encode(ECHO, 1, b"first")
+            + protocol.encode(PING, 2)
+            + third[:9]
+        )
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 1, b"first"))
+        self.assertEqual(protocol.recv_frame(s), (PING | RESPONSE, 2, b""))
+        s.sendall(third[9:])
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 3, b"third"))
+        s.close()
+
+    def test_pipelined_requests_come_back_in_order(self):
+        # 300 requests of all three types in a single write. PING is
+        # answered on the event loop and the others by workers, so this
+        # fails if a quick answer overtakes a slow one.
+        requests = b""
+        expected = []
+        for i in range(300):
+            if i % 3 == 0:
+                data = bytes([i % 256]) * (i * 7 % 500)
+                requests += protocol.encode(ECHO, i, data)
+                expected.append((ECHO | RESPONSE, i, data))
+            elif i % 3 == 1:
+                requests += protocol.encode(PING, i)
+                expected.append((PING | RESPONSE, i, b""))
+            else:
+                data = b"compute-%d" % i
+                requests += protocol.encode(
+                    COMPUTE, i, protocol.compute_payload(i % 20, data)
+                )
+                expected.append(protocol.compute_response(i, data, i % 20))
+
+        s = connect()
+        s.sendall(requests)
+        for frame in expected:
+            self.assertEqual(protocol.recv_frame(s), frame)
+        s.close()
+
+    def test_compute_matches_reference(self):
+        cases = [
+            (b"", 0),
+            (b"", 5),
+            (b"a", 1),
+            (b"abc", 3),
+            (b"hello world", 1000),
+            (bytes(range(256)), 17),
+            (b"x" * 5000, 2),
+        ]
+        s = connect()
+        for i, (data, iterations) in enumerate(cases):
+            reply = protocol.request(
+                s, COMPUTE, i, protocol.compute_payload(iterations, data)
+            )
+            self.assertEqual(
+                reply, protocol.compute_response(i, data, iterations)
+            )
+        s.close()
+
+    def test_compute_at_the_iteration_limit(self):
+        limit = protocol.MAX_COMPUTE_ITERATIONS
+        s = connect()
+
+        reply = protocol.request(
+            s, COMPUTE, 1, protocol.compute_payload(limit, b"z")
+        )
+        self.assertEqual(reply, protocol.compute_response(1, b"z", limit))
+
+        reply = protocol.request(
+            s, COMPUTE, 2, protocol.compute_payload(limit + 1, b"z")
+        )
+        self.assert_error(reply, protocol.ERR_BAD_REQUEST, 2)
+
+        self.assert_echo(s, b"still open")
+        s.close()
+
+    def test_compute_payload_too_short(self):
+        s = connect()
+        for i, payload in enumerate([b"", b"\x00", b"\x00\x00\x00"]):
+            reply = protocol.request(s, COMPUTE, i, payload)
+            self.assert_error(reply, protocol.ERR_BAD_REQUEST, i)
+        self.assert_echo(s, b"still open")
+        s.close()
+
+    def test_unknown_type_returns_error_and_connection_survives(self):
+        s = connect()
+        for i, msg_type in enumerate([0, STATS, 9, 0x7F, ECHO | RESPONSE, ERROR]):
+            reply = protocol.request(s, msg_type, i, b"whatever")
+            self.assert_error(reply, protocol.ERR_UNKNOWN_TYPE, i)
+        self.assert_echo(s, b"still open")
+        s.close()
+
+    def test_bad_version_returns_error_and_connection_survives(self):
+        s = connect()
+        s.sendall(protocol.encode(ECHO, 11, b"v2", version=2))
+        self.assert_error(
+            protocol.recv_frame(s), protocol.ERR_UNSUPPORTED_VERSION, 11
+        )
+        self.assert_echo(s, b"still open")
+        s.close()
+
+    def test_nonzero_reserved_returns_error_and_connection_survives(self):
+        s = connect()
+        s.sendall(protocol.encode(ECHO, 12, b"rsv", reserved=1))
+        self.assert_error(
+            protocol.recv_frame(s), protocol.ERR_MALFORMED_FRAME, 12
+        )
+        self.assert_echo(s, b"still open")
+        s.close()
+
+    def test_errors_keep_their_place_in_the_pipeline(self):
+        s = connect()
+        s.sendall(
+            protocol.encode(ECHO, 1, b"before")
+            + protocol.encode(9, 2)
+            + protocol.encode(ECHO, 3, b"v", version=3)
+            + protocol.encode(PING, 4)
+            + protocol.encode(ECHO, 5, b"after")
+        )
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 1, b"before"))
+        self.assert_error(protocol.recv_frame(s), protocol.ERR_UNKNOWN_TYPE, 2)
+        self.assert_error(
+            protocol.recv_frame(s), protocol.ERR_UNSUPPORTED_VERSION, 3
+        )
+        self.assertEqual(protocol.recv_frame(s), (PING | RESPONSE, 4, b""))
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 5, b"after"))
+        s.close()
+
+    def test_length_below_minimum_closes_after_error(self):
+        for length in (0, 7):
+            s = connect()
+            s.sendall(struct.pack(">I", length))
+            self.assert_error(
+                protocol.recv_frame(s), protocol.ERR_MALFORMED_FRAME, 0
+            )
+            self.assertIsNone(protocol.recv_frame(s))
+            s.close()
+
+    def test_oversize_length_closes_after_error(self):
+        # Only the length field is sent. The server must refuse without
+        # waiting for a megabyte that is never coming.
+        for length in (protocol.DEFAULT_MAX_FRAME + 1, 0xFFFFFFFF):
+            s = connect()
+            s.sendall(struct.pack(">I", length))
+            self.assert_error(
+                protocol.recv_frame(s), protocol.ERR_PAYLOAD_TOO_LARGE, 0
+            )
+            self.assertIsNone(protocol.recv_frame(s))
+            s.close()
+
+    def test_bad_length_is_reported_after_earlier_responses(self):
+        s = connect()
+        s.sendall(
+            protocol.encode(ECHO, 1, b"good")
+            + protocol.encode(COMPUTE, 2, protocol.compute_payload(50, b"data"))
+            + struct.pack(">I", 3)
+        )
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 1, b"good"))
+        self.assertEqual(
+            protocol.recv_frame(s), protocol.compute_response(2, b"data", 50)
+        )
+        self.assert_error(
+            protocol.recv_frame(s), protocol.ERR_MALFORMED_FRAME, 0
+        )
+        self.assertIsNone(protocol.recv_frame(s))
+        s.close()
+
+    def test_largest_frame_is_accepted(self):
+        payload = os.urandom(protocol.DEFAULT_MAX_FRAME - 8)
         s = connect()
         s.settimeout(20)
-        sender = threading.Thread(target=s.sendall, args=(payload,))
+        sender = threading.Thread(
+            target=s.sendall, args=(protocol.encode(ECHO, 1, payload),)
+        )
         sender.start()
-        received = recv_exact(s, len(payload))
+        reply = protocol.recv_frame(s)
         sender.join()
-        self.assertEqual(received, payload)
+        self.assertEqual(reply, (ECHO | RESPONSE, 1, payload))
         s.close()
 
     # macOS reports POLLHUP as soon as the peer half-closes, and the server
-    # closes on POLLHUP without reading first, so this fails about one run
-    # in three there. Remove the skip when step 4 fixes the server.
+    # closes on POLLHUP without reading first, so these fail about one run
+    # in three there. Remove the skips when step 4 fixes the server.
     @unittest.skipIf(
         sys.platform == "darwin",
         "known issue: POLLHUP on half-close, see docs/PROGRESS.md",
     )
     def test_half_close_still_gets_response(self):
         s = connect()
-        s.sendall(b"last words")
+        s.sendall(protocol.encode(ECHO, 1, b"last words"))
         s.shutdown(socket.SHUT_WR)
-        self.assertEqual(recv_exact(s, 10), b"last words")
-        self.assertEqual(s.recv(1), b"")
+        self.assertEqual(
+            protocol.recv_frame(s), (ECHO | RESPONSE, 1, b"last words")
+        )
+        self.assertIsNone(protocol.recv_frame(s))
+        s.close()
+
+    @unittest.skipIf(
+        sys.platform == "darwin",
+        "known issue: POLLHUP on half-close, see docs/PROGRESS.md",
+    )
+    def test_half_close_after_pipelined_requests(self):
+        s = connect()
+        s.sendall(
+            protocol.encode(ECHO, 1, b"one")
+            + protocol.encode(COMPUTE, 2, protocol.compute_payload(10, b"two"))
+            + protocol.encode(ECHO, 3, b"three")
+        )
+        s.shutdown(socket.SHUT_WR)
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 1, b"one"))
+        self.assertEqual(
+            protocol.recv_frame(s), protocol.compute_response(2, b"two", 10)
+        )
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 3, b"three"))
+        self.assertIsNone(protocol.recv_frame(s))
         s.close()
 
     def test_survives_abrupt_disconnects(self):
-        for _ in range(200):
+        # Clients that vanish with a request in flight, or halfway
+        # through sending one.
+        frame = protocol.encode(ECHO, 1, b"x" * 1000)
+        for i in range(200):
             s = connect()
-            s.sendall(b"x" * 1000)
+            s.sendall(frame if i % 2 == 0 else frame[: 5 + i])
             s.close()
         s = connect()
-        s.sendall(b"still alive")
-        self.assertEqual(recv_exact(s, 11), b"still alive")
+        self.assert_echo(s, b"still alive")
         s.close()
 
     def test_survives_reset_burst(self):
@@ -186,16 +415,18 @@ class ServerTest(ServerTestCase):
             )
             s.close()
         s = connect()
-        s.sendall(b"still alive")
-        self.assertEqual(recv_exact(s, 11), b"still alive")
+        self.assert_echo(s, b"still alive")
         s.close()
 
     def test_many_clients(self):
         socks = [connect() for _ in range(200)]
         for i, s in enumerate(socks):
-            s.sendall(f"client-{i:04d}".encode())
+            s.sendall(protocol.encode(ECHO, i, f"client-{i:04d}".encode()))
         for i, s in enumerate(socks):
-            self.assertEqual(recv_exact(s, 11), f"client-{i:04d}".encode())
+            self.assertEqual(
+                protocol.recv_frame(s),
+                (ECHO | RESPONSE, i, f"client-{i:04d}".encode()),
+            )
             s.close()
 
     def test_sigint_stops_server(self):
@@ -205,6 +436,109 @@ class ServerTest(ServerTestCase):
         idle.close()
 
 
+class LargeFrameTest(ServerTestCase):
+    MAX_FRAME = 8 * 1024 * 1024
+    OPTIONS = ("--workers", "4", "--max-frame", str(MAX_FRAME))
+
+    def test_large_payload(self):
+        # 4 MiB does not fit in the socket buffers, so the server has to
+        # handle partial reads and partial writes.
+        payload = os.urandom(4 * 1024 * 1024)
+        s = connect()
+        s.settimeout(20)
+        sender = threading.Thread(
+            target=s.sendall, args=(protocol.encode(ECHO, 1, payload),)
+        )
+        sender.start()
+        reply = protocol.recv_frame(s)
+        sender.join()
+        self.assertEqual(reply, (ECHO | RESPONSE, 1, payload))
+        s.close()
+
+    def test_frame_limit_follows_the_option(self):
+        s = connect()
+        s.sendall(struct.pack(">I", self.MAX_FRAME + 1))
+        self.assert_error(
+            protocol.recv_frame(s), protocol.ERR_PAYLOAD_TOO_LARGE, 0
+        )
+        self.assertIsNone(protocol.recv_frame(s))
+        s.close()
+
+
+class SlowReaderTest(ServerTestCase):
+    HIGH_WATER = 1024 * 1024
+    OPTIONS = ("--workers", "4", "--output-high-water", str(HIGH_WATER))
+
+    # How much the client offers before the test gives up waiting for the
+    # server to stop reading.
+    OFFERED = 64 * 1024 * 1024
+
+    def test_client_that_never_reads_is_throttled(self):
+        frame = protocol.encode(ECHO, 1, os.urandom(64 * 1024))
+        rss_before = rss_bytes(self.proc.pid)
+
+        # Small socket buffers on the client keep the kernel from hiding
+        # megabytes of responses on the server's behalf.
+        slow = socket.socket()
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
+        slow.connect(("127.0.0.1", PORT))
+        slow.setblocking(False)
+
+        # Send requests and never read a response. Stop once the socket
+        # has refused more data for a full second.
+        sent = 0
+        blocked_since = None
+        while sent < self.OFFERED:
+            try:
+                sent += slow.send(frame[sent % len(frame) :])
+                blocked_since = None
+            except BlockingIOError:
+                now = time.time()
+                if blocked_since is None:
+                    blocked_since = now
+                if now - blocked_since > 1:
+                    break
+                time.sleep(0.01)
+
+        # The server stopped taking requests long before the client ran
+        # out. Whatever it holds, it holds at most what was sent.
+        self.assertLess(sent, self.OFFERED)
+
+        grown = rss_bytes(self.proc.pid) - rss_before
+        self.assertLess(grown, 256 * 1024 * 1024)
+
+        # Everyone else is served as usual.
+        other = connect()
+        for i in range(50):
+            self.assert_echo(other, b"not affected", request_id=i)
+        self.assertEqual(protocol.request(other, PING, 99), (PING | RESPONSE, 99, b""))
+        other.close()
+
+        # When the slow client starts reading, it gets an intact response
+        # for every request it managed to send, in order.
+        slow.setblocking(True)
+        slow.settimeout(20)
+
+        whole_frames, partial = divmod(sent, len(frame))
+        finisher = None
+        if partial:
+            whole_frames += 1
+            finisher = threading.Thread(
+                target=slow.sendall, args=(frame[partial:],)
+            )
+            finisher.start()
+
+        expected = (ECHO | RESPONSE, 1, frame[protocol.HEADER.size :])
+        for _ in range(whole_frames):
+            self.assertEqual(protocol.recv_frame(slow), expected)
+
+        if finisher:
+            finisher.join()
+        self.assert_echo(slow, b"caught up")
+        slow.close()
+
+
 class ConnectionLimitTest(ServerTestCase):
     LIMIT = 5
     OPTIONS = ("--workers", "4", "--max-connections", str(LIMIT))
@@ -212,8 +546,7 @@ class ConnectionLimitTest(ServerTestCase):
     def fill_to_limit(self):
         held = [connect() for _ in range(self.LIMIT)]
         for s in held:
-            s.sendall(b"held")
-            self.assertEqual(recv_exact(s, 4), b"held")
+            self.assert_echo(s, b"held")
         return held
 
     def test_limit_is_enforced_and_recovers(self):
@@ -222,17 +555,16 @@ class ConnectionLimitTest(ServerTestCase):
         # The kernel completes the handshake on its own, so connect()
         # succeeds. The server must leave this connection in the backlog.
         extra = connect()
-        extra.sendall(b"extra")
+        extra.sendall(protocol.encode(ECHO, 1, b"extra"))
         extra.settimeout(0.5)
         with self.assertRaises(socket.timeout):
-            extra.recv(5)
+            extra.recv(1)
 
-        held[1].sendall(b"again")
-        self.assertEqual(recv_exact(held[1], 5), b"again")
+        self.assert_echo(held[1], b"again")
 
         held[0].close()
         extra.settimeout(5)
-        self.assertEqual(recv_exact(extra, 5), b"extra")
+        self.assertEqual(protocol.recv_frame(extra), (ECHO | RESPONSE, 1, b"extra"))
 
         extra.close()
         for s in held[1:]:
@@ -263,9 +595,8 @@ class ConnectionLimitTest(ServerTestCase):
                 for r in range(30):
                     message = f"c{i:02d}r{r:02d}".encode()
                     s = connect()
-                    s.sendall(message)
-                    if recv_exact(s, len(message)) != message:
-                        raise AssertionError("wrong echo")
+                    if not try_echo(s, message, request_id=r):
+                        raise AssertionError("no echo")
                     s.close()
             except Exception as e:
                 errors.append(repr(e))

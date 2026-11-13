@@ -88,7 +88,8 @@ TEST(Encode, ProducesTheDocumentedBytes) {
 }
 
 TEST(Encode, ErrorPayloadIsCodeThenMessage) {
-    std::string bytes = encodeError(9, ErrorCode::UnknownType, "unknown type");
+    std::string bytes = encodeError(9, ErrorCode::UnknownType,
+                                    errorName(ErrorCode::UnknownType));
 
     DecodeResult result = decodeFrame(bytes, MAX_LENGTH);
 

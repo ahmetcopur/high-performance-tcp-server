@@ -62,6 +62,9 @@ std::uint16_t readU16(const char* bytes);
 std::uint32_t readU32(const char* bytes);
 std::uint64_t readU64(const char* bytes);
 
+// The standard short text for a code, for example "unknown type".
+const char* errorName(ErrorCode code);
+
 // Writes the frame exactly as given, including a wrong version or a
 // nonzero reserved field. The length field is computed.
 std::string encodeFrame(const Frame& frame);

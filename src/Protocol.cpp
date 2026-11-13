@@ -43,6 +43,27 @@ std::uint64_t readU64(const char* bytes) {
            readU32(bytes + 4);
 }
 
+const char* errorName(ErrorCode code) {
+    switch (code) {
+    case ErrorCode::MalformedFrame:
+        return "malformed frame";
+    case ErrorCode::UnsupportedVersion:
+        return "unsupported version";
+    case ErrorCode::UnknownType:
+        return "unknown type";
+    case ErrorCode::PayloadTooLarge:
+        return "payload too large";
+    case ErrorCode::ServerBusy:
+        return "server busy";
+    case ErrorCode::InternalError:
+        return "internal error";
+    case ErrorCode::BadRequest:
+        return "bad request";
+    }
+
+    return "unknown error";
+}
+
 std::string encodeFrame(const Frame& frame) {
     std::string out;
     out.reserve(HEADER_SIZE + frame.payload.size());

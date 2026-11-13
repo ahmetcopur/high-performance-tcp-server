@@ -91,7 +91,7 @@ if(BUILD_TESTING)
     # The tests stop the server with SIGKILL, so a TSan report would never
     # reach the exit code. Fail on the report text instead.
     set_tests_properties(integration PROPERTIES
-        TIMEOUT 120
+        TIMEOUT 300
         FAIL_REGULAR_EXPRESSION
         "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
 endif()

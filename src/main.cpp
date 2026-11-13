@@ -1,7 +1,10 @@
 
+#include "Buffer.h"
 #include "Config.h"
+#include "Protocol.h"
 #include "ThreadPool.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -13,6 +16,7 @@
 #include <poll.h>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -21,7 +25,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-constexpr int BUFFER_SIZE = 4096;
+constexpr std::size_t READ_CHUNK = 64 * 1024;
 constexpr int ACCEPT_RETRY_MS = 100;
 
 volatile std::sig_atomic_t running = 1;
@@ -41,10 +45,26 @@ void wake() {
 }
 
 struct Client {
-    std::uint64_t id;
+    std::uint64_t id = 0;
+
+    // Bytes received and not yet decoded. Requests wait here as raw
+    // bytes until the request before them has been answered.
+    Buffer input;
+
+    // Encoded responses not yet sent.
+    Buffer output;
+
+    // One request is with the worker pool. Nothing more is decoded until
+    // its response is queued, which keeps responses in request order.
     bool processing = false;
-    std::string output;
-    std::size_t sent = 0;
+
+    // Output passed the high watermark. Reading and decoding stop until
+    // it has drained to the low watermark.
+    bool throttled = false;
+
+    // Nothing more will be read. Either the peer finished sending, or a
+    // bad length made the rest of the stream unusable.
+    bool readClosed = false;
 };
 
 struct Completion {
@@ -61,11 +81,35 @@ bool setNonBlocking(int fd) {
     return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0;
 }
 
-// Runs inside a worker thread
-std::string processMessage(std::string message) {
-    // Currently echoes the message.
-    // Later we can add parsing or CPU-intensive processing.
-    return message;
+// Runs inside a worker thread. Handles ECHO and COMPUTE, the only types
+// the event loop hands over, and returns the encoded response.
+std::string processRequest(protocol::Frame request) {
+    using namespace protocol;
+
+    Frame response;
+    response.type = static_cast<std::uint8_t>(request.type | RESPONSE_BIT);
+    response.requestId = request.requestId;
+
+    if (request.type == TYPE_ECHO) {
+        response.payload = std::move(request.payload);
+        return encodeFrame(response);
+    }
+
+    if (request.payload.size() < 4)
+        return encodeError(request.requestId, ErrorCode::BadRequest,
+                           "compute payload shorter than 4 bytes");
+
+    std::uint32_t iterations = readU32(request.payload.data());
+
+    if (iterations > MAX_COMPUTE_ITERATIONS)
+        return encodeError(request.requestId, ErrorCode::BadRequest,
+                           "iteration count above the limit");
+
+    std::string_view data(request.payload.data() + 4,
+                          request.payload.size() - 4);
+
+    appendU64(response.payload, computeHash(data, iterations));
+    return encodeFrame(response);
 }
 
 int main(int argc, char** argv) {
@@ -75,7 +119,8 @@ int main(int argc, char** argv) {
     if (!parseConfig(argc, argv, config, configError)) {
         std::cerr << configError << "\n"
                   << "Usage: " << argv[0] << " [--port N] [--workers N]"
-                  << " [--max-connections N] [--backlog N]\n";
+                  << " [--max-connections N] [--backlog N]"
+                  << " [--max-frame N] [--output-high-water N]\n";
         return 1;
     }
 
@@ -147,6 +192,15 @@ int main(int argc, char** argv) {
     std::uint64_t nextId = 1;
 
     const auto maxConnections = static_cast<std::size_t>(config.maxConnections);
+    const auto maxFrame = static_cast<std::uint32_t>(config.maxFrame);
+
+    // Room for exactly one frame of the largest size. A valid frame
+    // always fits, so a full input buffer always holds a complete one.
+    const std::size_t inputLimit = protocol::LENGTH_SIZE + maxFrame;
+
+    const auto outputHighWater =
+        static_cast<std::size_t>(config.outputHighWater);
+    const std::size_t outputLowWater = outputHighWater / 2;
 
     auto closeClient = [&](int fd) {
         close(fd);
@@ -170,35 +224,145 @@ int main(int argc, char** argv) {
         std::cerr << "accept: " << message << '\n';
     };
 
+    auto queueResponse = [&](Client& client, std::string_view response) {
+        client.output.append(response);
+
+        if (client.output.size() >= outputHighWater)
+            client.throttled = true;
+    };
+
+    // Decodes requests from the front of the input buffer and acts on
+    // them, until one goes to a worker, the output buffer is full, or
+    // the input holds no complete frame.
+    auto serveRequests = [&](int fd, Client& client) {
+        using namespace protocol;
+
+        while (!client.processing && !client.throttled) {
+            DecodeResult decoded = decodeFrame(client.input.view(), maxFrame);
+
+            if (decoded.status == DecodeStatus::Incomplete) {
+                // Once reading is over, a partial frame can never be
+                // completed.
+                if (client.readClosed)
+                    client.input.clear();
+
+                break;
+            }
+
+            if (decoded.status == DecodeStatus::Invalid) {
+                // Without a usable length there is no telling where the
+                // next frame starts. Answer, read nothing more, and let
+                // the connection close once the output is sent.
+                queueResponse(client, encodeError(0, decoded.error,
+                                                  errorName(decoded.error)));
+
+                client.input.clear();
+                client.readClosed = true;
+                break;
+            }
+
+            client.input.consume(decoded.consumed);
+
+            Frame& request = decoded.frame;
+            ErrorCode error;
+
+            if (!validateRequest(request, error)) {
+                queueResponse(client, encodeError(request.requestId, error,
+                                                  errorName(error)));
+                continue;
+            }
+
+            // Cheap enough to answer on this thread. It still waited its
+            // turn behind any request that was with a worker.
+            if (request.type == TYPE_PING) {
+                Frame response;
+                response.type = TYPE_PING | RESPONSE_BIT;
+                response.requestId = request.requestId;
+
+                queueResponse(client, encodeFrame(response));
+                continue;
+            }
+
+            client.processing = true;
+
+            try {
+                pool.enqueue([fd, id = client.id, request = std::move(request),
+                              &completionMutex, &completions]() mutable {
+                    Completion result{fd, id, "", false};
+
+                    // An exception must still produce a completion, or
+                    // the client would stay in the processing state
+                    // forever.
+                    try {
+                        result.response = processRequest(std::move(request));
+                    } catch (...) {
+                        result.failed = true;
+                    }
+
+                    bool wasEmpty;
+
+                    {
+                        std::lock_guard<std::mutex> lock(completionMutex);
+
+                        wasEmpty = completions.empty();
+                        completions.push(std::move(result));
+                    }
+
+                    // A non-empty queue already has a wakeup on its way.
+                    if (wasEmpty)
+                        wake();
+                });
+            } catch (const std::exception& e) {
+                std::cerr << "Task error: " << e.what() << '\n';
+
+                client.processing = false;
+                client.input.clear();
+                client.readClosed = true;
+            }
+        }
+    };
+
+    // Nothing left to read, decode, compute, or send.
+    auto finished = [](const Client& client) {
+        return client.readClosed && !client.processing &&
+               client.input.size() == 0 && client.output.size() == 0;
+    };
+
     std::cout << "Listening on 127.0.0.1:" << config.port << " with "
               << config.workers << " workers (Ctrl+C to stop)" << std::endl;
 
     // 4. Main event loop
     while (running) {
 
-        // Collect responses completed by worker threads
+        // Collect responses completed by worker threads. The queue is
+        // swapped out so the lock is not held while the responses are
+        // handled, which can submit new work.
+        std::queue<Completion> done;
+
         {
             std::lock_guard<std::mutex> lock(completionMutex);
+            std::swap(done, completions);
+        }
 
-            while (!completions.empty()) {
-                Completion result = std::move(completions.front());
+        while (!done.empty()) {
+            Completion result = std::move(done.front());
+            done.pop();
 
-                completions.pop();
+            auto it = clients.find(result.fd);
 
-                auto it = clients.find(result.fd);
+            if (it == clients.end() || it->second.id != result.id)
+                continue;
 
-                if (it == clients.end() || it->second.id != result.id)
-                    continue;
-
-                if (result.failed) {
-                    closeClient(result.fd);
-                    continue;
-                }
-
-                it->second.output = std::move(result.response);
-                it->second.sent = 0;
-                it->second.processing = false;
+            if (result.failed) {
+                closeClient(result.fd);
+                continue;
             }
+
+            Client& client = it->second;
+
+            client.processing = false;
+            queueResponse(client, result.response);
+            serveRequests(result.fd, client);
         }
 
         // 5. Build poll descriptor list
@@ -217,14 +381,16 @@ int main(int argc, char** argv) {
         fds.push_back({wakePipe[0], POLLIN, 0});
 
         for (const auto& [fd, client] : clients) {
-            short events = 0;
+            int events = 0;
 
-            if (!client.output.empty())
-                events = POLLOUT;
-            else if (!client.processing)
-                events = POLLIN;
+            if (client.output.size() > 0)
+                events |= POLLOUT;
 
-            fds.push_back({fd, events, 0});
+            if (!client.readClosed && !client.throttled &&
+                client.input.size() < inputLimit)
+                events |= POLLIN;
+
+            fds.push_back({fd, static_cast<short>(events), 0});
         }
 
         // 6. Sleep until a socket is ready or wake() is called. During an
@@ -301,7 +467,10 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
-                clients.emplace(fd, Client{nextId++, false, "", 0});
+                Client client;
+                client.id = nextId++;
+
+                clients.emplace(fd, std::move(client));
             }
         }
 
@@ -314,6 +483,7 @@ int main(int argc, char** argv) {
             if (it == clients.end())
                 continue;
 
+            Client& client = it->second;
             short revents = fds[i].revents;
 
             if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
@@ -321,17 +491,16 @@ int main(int argc, char** argv) {
                 continue;
             }
 
+            bool failed = false;
+
             // Socket is ready for writing
             if (revents & POLLOUT) {
-                Client& client = it->second;
-                bool failed = false;
-
-                while (client.sent < client.output.size()) {
-                    ssize_t n = send(fd, client.output.data() + client.sent,
-                                     client.output.size() - client.sent, 0);
+                while (client.output.size() > 0) {
+                    ssize_t n =
+                        send(fd, client.output.data(), client.output.size(), 0);
 
                     if (n > 0) {
-                        client.sent += static_cast<std::size_t>(n);
+                        client.output.consume(static_cast<std::size_t>(n));
                     }
                     else if (n < 0 && errno == EINTR) {
                         continue;
@@ -346,74 +515,52 @@ int main(int argc, char** argv) {
                     }
                 }
 
-                if (failed) {
-                    closeClient(fd);
-                }
-                else if (client.sent == client.output.size()) {
-                    client.output.clear();
-                    client.sent = 0;
-                }
+                if (client.output.size() <= outputLowWater)
+                    client.throttled = false;
             }
 
-            // Socket is ready for reading
-            else if (revents & POLLIN) {
-                char buffer[BUFFER_SIZE];
+            // Socket is ready for reading. Take everything that is there,
+            // up to the input limit, before decoding any of it.
+            if (!failed && (revents & POLLIN)) {
+                char chunk[READ_CHUNK];
 
-                ssize_t n = recv(fd, buffer, sizeof(buffer), 0);
+                while (client.input.size() < inputLimit) {
+                    std::size_t room = std::min(
+                        sizeof(chunk), inputLimit - client.input.size());
 
-                if (n == 0) {
-                    closeClient(fd);
-                }
-                else if (n < 0) {
-                    if (errno != EINTR && errno != EAGAIN &&
-                        errno != EWOULDBLOCK) {
-                        closeClient(fd);
+                    ssize_t n = recv(fd, chunk, room, 0);
+
+                    if (n > 0) {
+                        client.input.append(
+                            {chunk, static_cast<std::size_t>(n)});
                     }
-                }
-                else {
-                    std::uint64_t id = it->second.id;
-                    it->second.processing = true;
-
-                    std::string message(buffer, static_cast<std::size_t>(n));
-
-                    // 9. Submit processing to Thread Pool
-                    try {
-                        pool.enqueue([fd, id, message = std::move(message),
-                                      &completionMutex,
-                                      &completions]() mutable {
-                            Completion result{fd, id, "", false};
-
-                            // An exception must still produce a
-                            // completion, or the client would stay
-                            // in the processing state forever.
-                            try {
-                                result.response =
-                                    processMessage(std::move(message));
-                            } catch (...) {
-                                result.failed = true;
-                            }
-
-                            bool wasEmpty;
-
-                            {
-                                std::lock_guard<std::mutex> lock(
-                                    completionMutex);
-
-                                wasEmpty = completions.empty();
-                                completions.push(std::move(result));
-                            }
-
-                            // A non-empty queue already has a
-                            // wakeup on its way.
-                            if (wasEmpty)
-                                wake();
-                        });
-                    } catch (const std::exception& e) {
-                        std::cerr << "Task error: " << e.what() << '\n';
-                        closeClient(fd);
+                    else if (n == 0) {
+                        client.readClosed = true;
+                        break;
+                    }
+                    else if (errno == EINTR) {
+                        continue;
+                    }
+                    else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        break;
+                    }
+                    else {
+                        failed = true;
+                        break;
                     }
                 }
             }
+
+            if (failed) {
+                closeClient(fd);
+                continue;
+            }
+
+            // 9. Decode what arrived and hand requests to the Thread Pool
+            serveRequests(fd, client);
+
+            if (finished(client))
+                closeClient(fd);
         }
     }
 

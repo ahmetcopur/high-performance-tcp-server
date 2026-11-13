@@ -33,6 +33,8 @@ TEST(Config, DefaultsWhenNoArguments) {
     EXPECT_EQ(config.workers, 8);
     EXPECT_EQ(config.maxConnections, 10000);
     EXPECT_EQ(config.backlog, SOMAXCONN);
+    EXPECT_EQ(config.maxFrame, 1048576);
+    EXPECT_EQ(config.outputHighWater, 4194304);
 }
 
 TEST(Config, ReadsEveryOption) {
@@ -40,13 +42,16 @@ TEST(Config, ReadsEveryOption) {
     std::string error;
 
     ASSERT_TRUE(parse({"--port", "9000", "--workers", "2", "--max-connections",
-                       "50", "--backlog", "64"},
+                       "50", "--backlog", "64", "--max-frame", "4096",
+                       "--output-high-water", "65536"},
                       config, error));
 
     EXPECT_EQ(config.port, 9000);
     EXPECT_EQ(config.workers, 2);
     EXPECT_EQ(config.maxConnections, 50);
     EXPECT_EQ(config.backlog, 64);
+    EXPECT_EQ(config.maxFrame, 4096);
+    EXPECT_EQ(config.outputHighWater, 65536);
 }
 
 TEST(Config, RejectsUnknownOption) {
@@ -74,6 +79,8 @@ TEST(Config, RejectsValuesOutOfRange) {
     EXPECT_TRUE(fails({"--workers", "-1"}));
     EXPECT_TRUE(fails({"--max-connections", "0"}));
     EXPECT_TRUE(fails({"--backlog", "0"}));
+    EXPECT_TRUE(fails({"--max-frame", "7"}));
+    EXPECT_TRUE(fails({"--output-high-water", "0"}));
 }
 
 TEST(Config, AcceptsRangeLimits) {
@@ -82,4 +89,5 @@ TEST(Config, AcceptsRangeLimits) {
 
     EXPECT_TRUE(parse({"--port", "1"}, config, error));
     EXPECT_TRUE(parse({"--port", "65535"}, config, error));
+    EXPECT_TRUE(parse({"--max-frame", "8"}, config, error));
 }
