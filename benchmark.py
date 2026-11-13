@@ -3,12 +3,18 @@ import asyncio
 import sys
 import time
 import statistics
+import struct
 import math
 
 HOST = "127.0.0.1"
 PORT = 8080
 REQUESTS_PER_CLIENT = 200
 MESSAGE_SIZE = 6
+
+# Frame header from docs/protocol.md: length, version, type, reserved, id.
+HEADER = struct.Struct(">IBBHI")
+ECHO = 2
+RESPONSE = 0x80
 
 
 async def simulate_client(client_id):
@@ -21,8 +27,12 @@ async def simulate_client(client_id):
 
     try:
         for i in range(REQUESTS_PER_CLIENT):
-            message = f"{client_id}:{i}:".encode()
-            message = message.ljust(MESSAGE_SIZE, b"x")
+            payload = f"{client_id}:{i}:".encode()
+            payload = payload.ljust(MESSAGE_SIZE, b"x")
+
+            length = 8 + len(payload)
+            message = HEADER.pack(length, 1, ECHO, 0, i) + payload
+            expected = HEADER.pack(length, 1, ECHO | RESPONSE, 0, i) + payload
 
             start = time.perf_counter()
 
@@ -36,7 +46,7 @@ async def simulate_client(client_id):
 
             latency = (time.perf_counter() - start) * 1000
 
-            if response != message:
+            if response != expected:
                 raise ValueError("Incorrect echo response")
 
             latencies.append(latency)
