@@ -150,10 +150,14 @@ bool validateRequest(const Frame& frame, ErrorCode& error) {
     return true;
 }
 
-std::uint64_t computeHash(std::string_view data, std::uint32_t iterations) {
+std::uint64_t computeHash(std::string_view data, std::uint32_t iterations,
+                          const std::atomic<bool>* cancelled) {
     std::uint64_t hash = 0xcbf29ce484222325ull;
 
     for (std::uint32_t i = 0; i < iterations; ++i) {
+        if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed))
+            break;
+
         for (char c : data) {
             hash ^= static_cast<std::uint8_t>(c);
             hash *= 0x100000001b3ull;

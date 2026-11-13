@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -101,6 +102,11 @@ bool validateRequest(const Frame& frame, ErrorCode& error);
 
 // The work behind COMPUTE: 64-bit FNV-1a over data, passing over it
 // `iterations` times without resetting the hash in between.
-std::uint64_t computeHash(std::string_view data, std::uint32_t iterations);
+//
+// If cancelled is given, it is looked at before every pass, and the
+// function returns early once it is true. The value returned then is
+// meaningless and must not be sent to anyone.
+std::uint64_t computeHash(std::string_view data, std::uint32_t iterations,
+                          const std::atomic<bool>* cancelled = nullptr);
 
 } // namespace protocol

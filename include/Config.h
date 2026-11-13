@@ -31,6 +31,10 @@ struct Config {
 
     // After a framing error: our side is closed, the peer's is not yet.
     int lingerTimeoutMs = 2000;
+
+    // After SIGINT or SIGTERM: how long connections get to receive the
+    // responses they are owed before everything is closed.
+    int shutdownTimeoutMs = 5000;
 };
 
 // Reads "--name value" pairs into config. On failure returns false and

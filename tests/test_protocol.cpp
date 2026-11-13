@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -336,4 +337,18 @@ TEST(ComputeHash, PassesContinueFromThePreviousOne) {
 
 TEST(ComputeHash, TreatsBytesAsUnsigned) {
     EXPECT_EQ(computeHash(std::string("\xff", 1), 1), 0xaf64724c8602eb6eull);
+}
+
+TEST(ComputeHash, AFlagThatStaysFalseChangesNothing) {
+    std::atomic<bool> cancelled{false};
+
+    EXPECT_EQ(computeHash("abc", 3, &cancelled), computeHash("abc", 3));
+}
+
+// Uncancelled, this is 100,000 passes over a megabyte and takes minutes.
+TEST(ComputeHash, StopsAtOnceWhenCancelled) {
+    std::atomic<bool> cancelled{true};
+    std::string data(1 << 20, 'x');
+
+    computeHash(data, MAX_COMPUTE_ITERATIONS, &cancelled);
 }

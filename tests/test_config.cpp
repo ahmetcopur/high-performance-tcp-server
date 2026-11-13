@@ -39,6 +39,7 @@ TEST(Config, DefaultsWhenNoArguments) {
     EXPECT_EQ(config.partialFrameTimeoutMs, 10000);
     EXPECT_EQ(config.writeStallTimeoutMs, 10000);
     EXPECT_EQ(config.lingerTimeoutMs, 2000);
+    EXPECT_EQ(config.shutdownTimeoutMs, 5000);
 }
 
 TEST(Config, ReadsEveryOption) {
@@ -64,7 +65,9 @@ TEST(Config, ReadsEveryOption) {
                        "--write-stall-timeout-ms",
                        "300",
                        "--linger-timeout-ms",
-                       "400"},
+                       "400",
+                       "--shutdown-timeout-ms",
+                       "500"},
                       config, error));
 
     EXPECT_EQ(config.port, 9000);
@@ -77,6 +80,7 @@ TEST(Config, ReadsEveryOption) {
     EXPECT_EQ(config.partialFrameTimeoutMs, 200);
     EXPECT_EQ(config.writeStallTimeoutMs, 300);
     EXPECT_EQ(config.lingerTimeoutMs, 400);
+    EXPECT_EQ(config.shutdownTimeoutMs, 500);
 }
 
 TEST(Config, RejectsUnknownOption) {

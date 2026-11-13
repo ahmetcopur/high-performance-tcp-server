@@ -38,6 +38,7 @@ const Option OPTIONS[] = {
     {"--partial-frame-timeout-ms", &Config::partialFrameTimeoutMs, 1, INT_MAX},
     {"--write-stall-timeout-ms", &Config::writeStallTimeoutMs, 1, INT_MAX},
     {"--linger-timeout-ms", &Config::lingerTimeoutMs, 1, INT_MAX},
+    {"--shutdown-timeout-ms", &Config::shutdownTimeoutMs, 1, INT_MAX},
 };
 
 } // namespace
