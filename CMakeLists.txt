@@ -55,6 +55,7 @@ add_library(tcpserver STATIC
     src/Buffer.cpp
     src/Config.cpp
     src/FileDescriptor.cpp
+    src/PollPoller.cpp
     src/Protocol.cpp)
 target_include_directories(tcpserver PUBLIC include)
 target_link_libraries(tcpserver
@@ -79,6 +80,7 @@ if(BUILD_TESTING)
             test_buffer
             test_config
             test_file_descriptor
+            test_poller
             test_protocol
             test_threadpool)
         add_executable(${name} tests/${name}.cpp)
