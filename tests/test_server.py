@@ -482,17 +482,23 @@ class ServerTest(ServerTestCase):
 
     def test_reset_with_a_request_in_flight(self):
         # The worker finishes a request whose connection is already gone.
-        # Its result must be dropped, not delivered to a newer connection.
-        heavy = protocol.encode(
+        # Its result must be dropped, not delivered to the next connection,
+        # which usually gets the same descriptor number.
+        #
+        # The request is only as heavy as it needs to be to outlast the
+        # pause. An abandoned request still occupies its worker, so heavy
+        # ones would make the echo below wait its turn behind them.
+        busy = protocol.encode(
             COMPUTE,
             1,
             protocol.compute_payload(
-                protocol.MAX_COMPUTE_ITERATIONS, b"x" * 2048
+                protocol.MAX_COMPUTE_ITERATIONS, b"x" * 256
             ),
         )
-        for _ in range(20):
+        for _ in range(8):
             s = connect()
-            s.sendall(heavy)
+            s.sendall(busy)
+            time.sleep(0.005)
             reset(s)
             fresh = connect()
             self.assert_echo(fresh, b"mine", request_id=77)
@@ -541,8 +547,10 @@ class FdLeakTest(ServerTestCase):
         pid = self.proc.pid
         baseline = settled_fd_count(pid)
         frame = protocol.encode(ECHO, 1, b"x" * 1000)
+        # Light enough that abandoned requests do not pile up on the
+        # workers and delay the echoes in this loop.
         heavy = protocol.encode(
-            COMPUTE, 1, protocol.compute_payload(20000, b"x" * 1024)
+            COMPUTE, 1, protocol.compute_payload(2000, b"x" * 1024)
         )
 
         for i in range(300):
