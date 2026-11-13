@@ -775,7 +775,17 @@ class WriteStallTimeoutTest(ServerTestCase):
 
         start = time.time()
         for i in range(count):
-            self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, i, payload))
+            try:
+                frame = protocol.recv_frame(s)
+            except ConnectionResetError:
+                self.fail(
+                    f"reset after {i} of {count} responses and "
+                    f"{time.time() - start:.2f} s, receive buffer "
+                    f"{s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)}, "
+                    f"segment size "
+                    f"{s.getsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG)}"
+                )
+            self.assertEqual(frame, (ECHO | RESPONSE, i, payload))
             time.sleep(0.03)
         sender.join()
 

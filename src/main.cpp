@@ -117,6 +117,24 @@ Phase phaseOf(const Client& client) {
     return Phase::Idle;
 }
 
+// For the log line written when a phase runs out of time.
+const char* timeoutName(Phase phase) {
+    switch (phase) {
+    case Phase::Idle:
+        return "idle connection";
+    case Phase::Partial:
+        return "frame not completed";
+    case Phase::Writing:
+        return "output not taken";
+    case Phase::Lingering:
+        return "peer did not close after an error";
+    case Phase::Busy:
+        break;
+    }
+
+    return "";
+}
+
 struct Completion {
     int fd;
     std::uint64_t id;
@@ -272,6 +290,7 @@ int main(int argc, char** argv) {
 
     std::chrono::steady_clock::time_point lastAcceptLog;
     std::chrono::steady_clock::time_point lastConnectionLog;
+    std::chrono::steady_clock::time_point lastTimeoutLog;
 
     // A flood of failures must not become a flood of log lines. Each
     // source writes at most one line per second.
@@ -481,6 +500,7 @@ int main(int argc, char** argv) {
                         .count();
 
                 if (remainingMs <= 0) {
+                    logLimited(lastTimeoutLog, "timeout", timeoutName(phase));
                     close(fd);
                     it = clients.erase(it);
                     continue;
