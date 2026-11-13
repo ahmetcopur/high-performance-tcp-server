@@ -54,6 +54,7 @@ endif()
 add_library(tcpserver STATIC
     src/Buffer.cpp
     src/Config.cpp
+    src/Connection.cpp
     src/FileDescriptor.cpp
     src/PollPoller.cpp
     src/Protocol.cpp)
@@ -79,6 +80,7 @@ if(BUILD_TESTING)
     foreach(name
             test_buffer
             test_config
+            test_connection
             test_file_descriptor
             test_poller
             test_protocol
