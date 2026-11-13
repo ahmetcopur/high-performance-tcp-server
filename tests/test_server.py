@@ -712,6 +712,8 @@ class WriteStallTimeoutTest(ServerTestCase):
         "500",
         "--output-high-water",
         "65536",
+        "--max-frame",
+        str(32 * 1024 * 1024),
     )
 
     def test_client_that_never_reads_is_cut_off(self):
@@ -756,40 +758,57 @@ class WriteStallTimeoutTest(ServerTestCase):
         self.assert_echo(other, b"not affected")
         other.close()
 
-    def test_slow_but_steady_reader_is_not_cut_off(self):
-        # 2 MiB of responses read in small sips with pauses. The whole
-        # exchange takes several times the timeout, but output keeps
-        # moving, so the stall timer never runs out.
-        payload = os.urandom(32 * 1024)
-        count = 64
-        s = socket.socket()
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32 * 1024)
-        s.connect(("127.0.0.1", PORT))
-        s.settimeout(10)
+    def test_large_response_read_slowly_is_not_cut_off(self):
+        # One 16 MiB response, read at 8 MiB/s. Sending it takes four
+        # times the timeout and output is waiting the whole time, but it
+        # keeps moving, so the timer must keep starting again.
+        #
+        # The rate is chosen with care. A sender only learns that the
+        # reader has made room when the reader's kernel says so, and
+        # macOS says so about once per half receive buffer. A reader
+        # taking 32 KiB every 70 ms let the server send only every
+        # 590 ms, which no server can tell from a stall. At 8 MiB/s half
+        # a buffer is gone in tens of milliseconds.
+        payload = os.urandom(16 * 1024 * 1024)
+        rate = 8 * 1024 * 1024
 
-        requests = b"".join(
-            protocol.encode(ECHO, i, payload) for i in range(count)
+        s = connect()
+        s.settimeout(20)
+        sender = threading.Thread(
+            target=s.sendall, args=(protocol.encode(ECHO, 1, payload),)
         )
-        sender = threading.Thread(target=s.sendall, args=(requests,))
         sender.start()
 
+        header = protocol.recv_exact(s, protocol.HEADER.size)
+        self.assertEqual(
+            protocol.HEADER.unpack(header),
+            (8 + len(payload), 1, ECHO | RESPONSE, 0, 1),
+        )
+
+        # Paced by the clock, not by the length of each sleep, which is
+        # more than twice as long on a busy CI machine as it is asked for.
         start = time.time()
-        for i in range(count):
+        received = bytearray()
+        while len(received) < len(payload):
+            if len(received) > rate * (time.time() - start):
+                time.sleep(0.005)
+                continue
             try:
-                frame = protocol.recv_frame(s)
+                chunk = s.recv(min(65536, len(payload) - len(received)))
             except ConnectionResetError:
+                chunk = b""
+            if not chunk:
                 self.fail(
-                    f"reset after {i} of {count} responses and "
-                    f"{time.time() - start:.2f} s, receive buffer "
-                    f"{s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)}, "
-                    f"segment size "
-                    f"{s.getsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG)}"
+                    f"cut off after {len(received)} of {len(payload)} bytes "
+                    f"and {time.time() - start:.2f} s, receive buffer "
+                    f"{s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)}"
                 )
-            self.assertEqual(frame, (ECHO | RESPONSE, i, payload))
-            time.sleep(0.03)
+            received += chunk
+        elapsed = time.time() - start
         sender.join()
 
-        self.assertGreater(time.time() - start, 1.5)
+        self.assertEqual(bytes(received), payload)
+        self.assertGreater(elapsed, 1.5)
         s.close()
 
 
