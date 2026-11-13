@@ -16,9 +16,27 @@ struct Config {
     // Pending output per connection above which the server stops reading
     // from it. Reading resumes at half of this.
     int outputHighWater = 4 << 20;
+
+    // How long a connection may stay in each waiting state, in
+    // milliseconds, before the server closes it.
+
+    // Nothing buffered and no request in flight.
+    int idleTimeoutMs = 60000;
+
+    // A frame has started to arrive and is not complete.
+    int partialFrameTimeoutMs = 10000;
+
+    // Output is waiting and the peer takes none of it.
+    int writeStallTimeoutMs = 10000;
+
+    // After a framing error: our side is closed, the peer's is not yet.
+    int lingerTimeoutMs = 2000;
 };
 
 // Reads "--name value" pairs into config. On failure returns false and
 // puts a message for the user in error.
 bool parseConfig(int argc, const char* const* argv, Config& config,
                  std::string& error);
+
+// One line per option, for the usage message.
+std::string optionSummary();

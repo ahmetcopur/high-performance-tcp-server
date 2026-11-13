@@ -35,15 +35,36 @@ TEST(Config, DefaultsWhenNoArguments) {
     EXPECT_EQ(config.backlog, SOMAXCONN);
     EXPECT_EQ(config.maxFrame, 1048576);
     EXPECT_EQ(config.outputHighWater, 4194304);
+    EXPECT_EQ(config.idleTimeoutMs, 60000);
+    EXPECT_EQ(config.partialFrameTimeoutMs, 10000);
+    EXPECT_EQ(config.writeStallTimeoutMs, 10000);
+    EXPECT_EQ(config.lingerTimeoutMs, 2000);
 }
 
 TEST(Config, ReadsEveryOption) {
     Config config;
     std::string error;
 
-    ASSERT_TRUE(parse({"--port", "9000", "--workers", "2", "--max-connections",
-                       "50", "--backlog", "64", "--max-frame", "4096",
-                       "--output-high-water", "65536"},
+    ASSERT_TRUE(parse({"--port",
+                       "9000",
+                       "--workers",
+                       "2",
+                       "--max-connections",
+                       "50",
+                       "--backlog",
+                       "64",
+                       "--max-frame",
+                       "4096",
+                       "--output-high-water",
+                       "65536",
+                       "--idle-timeout-ms",
+                       "100",
+                       "--partial-frame-timeout-ms",
+                       "200",
+                       "--write-stall-timeout-ms",
+                       "300",
+                       "--linger-timeout-ms",
+                       "400"},
                       config, error));
 
     EXPECT_EQ(config.port, 9000);
@@ -52,6 +73,10 @@ TEST(Config, ReadsEveryOption) {
     EXPECT_EQ(config.backlog, 64);
     EXPECT_EQ(config.maxFrame, 4096);
     EXPECT_EQ(config.outputHighWater, 65536);
+    EXPECT_EQ(config.idleTimeoutMs, 100);
+    EXPECT_EQ(config.partialFrameTimeoutMs, 200);
+    EXPECT_EQ(config.writeStallTimeoutMs, 300);
+    EXPECT_EQ(config.lingerTimeoutMs, 400);
 }
 
 TEST(Config, RejectsUnknownOption) {
@@ -81,6 +106,8 @@ TEST(Config, RejectsValuesOutOfRange) {
     EXPECT_TRUE(fails({"--backlog", "0"}));
     EXPECT_TRUE(fails({"--max-frame", "7"}));
     EXPECT_TRUE(fails({"--output-high-water", "0"}));
+    EXPECT_TRUE(fails({"--idle-timeout-ms", "0"}));
+    EXPECT_TRUE(fails({"--linger-timeout-ms", "-5"}));
 }
 
 TEST(Config, AcceptsRangeLimits) {
@@ -90,4 +117,14 @@ TEST(Config, AcceptsRangeLimits) {
     EXPECT_TRUE(parse({"--port", "1"}, config, error));
     EXPECT_TRUE(parse({"--port", "65535"}, config, error));
     EXPECT_TRUE(parse({"--max-frame", "8"}, config, error));
+}
+
+TEST(Config, SummaryListsEveryOptionWithItsDefault) {
+    std::string summary = optionSummary();
+
+    EXPECT_NE(summary.find("--port N   (default 8080)"), std::string::npos);
+    EXPECT_NE(summary.find("--idle-timeout-ms N   (default 60000)"),
+              std::string::npos);
+    EXPECT_NE(summary.find("--linger-timeout-ms N   (default 2000)"),
+              std::string::npos);
 }

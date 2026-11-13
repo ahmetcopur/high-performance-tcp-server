@@ -118,9 +118,8 @@ int main(int argc, char** argv) {
 
     if (!parseConfig(argc, argv, config, configError)) {
         std::cerr << configError << "\n"
-                  << "Usage: " << argv[0] << " [--port N] [--workers N]"
-                  << " [--max-connections N] [--backlog N]"
-                  << " [--max-frame N] [--output-high-water N]\n";
+                  << "Usage: " << argv[0] << " [option value]...\n"
+                  << optionSummary();
         return 1;
     }
 
