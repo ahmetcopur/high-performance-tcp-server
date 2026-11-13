@@ -5,6 +5,7 @@
 #include "ThreadPool.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -29,6 +30,11 @@ constexpr std::size_t READ_CHUNK = 64 * 1024;
 constexpr int ACCEPT_RETRY_MS = 100;
 
 volatile std::sig_atomic_t running = 1;
+
+// Set at the very end of a shutdown. Requests still running then belong
+// to connections that no longer exist, and COMPUTE gives up when it
+// sees this.
+std::atomic<bool> stopWork{false};
 
 // Write end of the wake pipe. The event loop polls the read end.
 int wakeWriteFd = -1;
@@ -70,6 +76,18 @@ enum class Phase {
     Lingering, // our side is shut down, waiting for the peer to close
 };
 
+// The first SIGINT or SIGTERM asks the event loop to shut down. Both
+// signals then get their default action back, so a second one ends the
+// process at once.
+void onSignal(int) {
+    running = 0;
+
+    std::signal(SIGINT, SIG_DFL);
+    std::signal(SIGTERM, SIG_DFL);
+
+    wake();
+}
+
 struct Client {
     std::uint64_t id = 0;
 
@@ -103,11 +121,11 @@ Phase phaseOf(const Client& client) {
     if (client.output.size() > 0)
         return Phase::Writing;
 
-    if (client.state == State::Closing)
-        return Phase::Lingering;
-
     if (client.processing)
         return Phase::Busy;
+
+    if (client.state == State::Closing)
+        return Phase::Lingering;
 
     // Complete frames never wait here while nothing is in flight, so
     // whatever is left is the start of a frame.
@@ -176,7 +194,7 @@ std::string processRequest(protocol::Frame request) {
     std::string_view data(request.payload.data() + 4,
                           request.payload.size() - 4);
 
-    appendU64(response.payload, computeHash(data, iterations));
+    appendU64(response.payload, computeHash(data, iterations, &stopWork));
     return encodeFrame(response);
 }
 
@@ -200,11 +218,6 @@ int main(int argc, char** argv) {
     }
 
     wakeWriteFd = wakePipe[1];
-
-    auto onSignal = [](int) {
-        running = 0;
-        wake();
-    };
 
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
@@ -431,8 +444,47 @@ int main(int argc, char** argv) {
     std::cout << "Listening on 127.0.0.1:" << config.port << " with "
               << config.workers << " workers (Ctrl+C to stop)" << std::endl;
 
-    // 4. Main event loop
-    while (running) {
+    // 4. Main event loop. It ends when a shutdown has seen off every
+    // connection, or has run out of time.
+    bool draining = false;
+    std::chrono::steady_clock::time_point drainDeadline;
+
+    while (true) {
+
+        // The first signal starts the shutdown.
+        if (!running && !draining) {
+            draining = true;
+            drainDeadline = std::chrono::steady_clock::now() +
+                            std::chrono::milliseconds(config.shutdownTimeoutMs);
+
+            // No new connections from here on.
+            close(serverSocket);
+            serverSocket = -1;
+
+            for (auto it = clients.begin(); it != clients.end();) {
+                Client& client = it->second;
+
+                // Requests that have not been started are not started.
+                client.input.clear();
+
+                if (!client.processing && client.output.size() == 0) {
+                    close(it->first);
+                    it = clients.erase(it);
+                    continue;
+                }
+
+                // What is owed is still sent. The connection then ends
+                // as it does after a framing error: FIN first, and
+                // close() once the peer has closed too.
+                if (client.state == State::Open)
+                    client.state = State::Closing;
+
+                ++it;
+            }
+        }
+
+        if (draining && clients.empty())
+            break;
 
         // Collect responses completed by worker threads. The queue is
         // swapped out so the lock is not held while the responses are
@@ -524,10 +576,28 @@ int main(int argc, char** argv) {
             ++it;
         }
 
+        if (draining) {
+            long long remainingMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    drainDeadline - now)
+                    .count();
+
+            if (remainingMs <= 0) {
+                std::cerr << "shutdown: time is up, closing " << clients.size()
+                          << " connection(s)\n";
+                break;
+            }
+
+            if (timeoutMs < 0 || remainingMs + 1 < timeoutMs)
+                timeoutMs = remainingMs + 1;
+        }
+
         // At the connection limit the listening socket is left out, so
         // new connections wait in the kernel backlog and poll() does not
         // keep returning for a socket we are not going to accept from.
-        if (clients.size() < maxConnections && !acceptBackoff)
+        // During a shutdown it is already closed, and poll() skips the
+        // negative descriptor.
+        if (!draining && clients.size() < maxConnections && !acceptBackoff)
             fds[0].events = POLLIN;
 
         // 6. Sleep until a socket is ready, wake() is called, or the
@@ -735,8 +805,8 @@ int main(int argc, char** argv) {
             // open for reading, so that bytes the peer is still sending
             // do not turn our close() into a reset that could destroy
             // the error before the peer has read it.
-            if (client.state == State::Closing && client.output.size() == 0 &&
-                !client.finSent) {
+            if (client.state == State::Closing && !client.processing &&
+                client.output.size() == 0 && !client.finSent) {
                 shutdown(fd, SHUT_WR);
                 client.finSent = true;
             }
@@ -746,15 +816,28 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 10. Shutdown
+    // 10. Shutdown. The order is spelled out here and does not depend on
+    // the order in which the variables above happen to be declared.
+
+    // Connections first. Any that are left here ran out of time.
     for (const auto& [fd, client] : clients)
         close(fd);
 
-    close(serverSocket);
+    clients.clear();
+
+    if (serverSocket >= 0)
+        close(serverSocket);
+
     close(spareFd);
 
-    // Workers may still call wake(), so stop them before closing the pipe.
+    // Then the workers. Whatever they are still computing belongs to a
+    // connection that no longer exists, so they are told to give up.
+    // shutdown() returns when every worker thread has ended. From then on
+    // this is the only thread, and nothing else can touch the completion
+    // queue, its mutex, or the wake pipe.
+    stopWork = true;
     pool.shutdown();
+
     close(wakePipe[0]);
     close(wakePipe[1]);
 

@@ -162,6 +162,28 @@ class ServerTestCase(unittest.TestCase):
             (ECHO | RESPONSE, request_id, data),
         )
 
+    def compute_lasting(self, seconds):
+        # A COMPUTE request that keeps a worker busy for at least this
+        # long on this machine and build, found by doubling the data.
+        s = connect()
+        s.settimeout(60)
+        size = 256
+        while True:
+            frame = protocol.encode(
+                COMPUTE,
+                1,
+                protocol.compute_payload(
+                    protocol.MAX_COMPUTE_ITERATIONS, b"x" * size
+                ),
+            )
+            start = time.time()
+            s.sendall(frame)
+            self.assertEqual(protocol.recv_frame(s)[0], COMPUTE | RESPONSE)
+            if time.time() - start >= seconds:
+                s.close()
+                return frame
+            size *= 2
+
     def assert_error(self, frame, code, request_id):
         self.assertEqual(frame[0], ERROR)
         self.assertEqual(frame[1], request_id)
@@ -836,6 +858,192 @@ class LingerTimeoutTest(ServerTestCase):
         # The server has sent its FIN and is waiting for ours, which
         # never comes. Its descriptor must be freed all the same.
         self.assertEqual(wait_for_fd_count(self.proc.pid, baseline), baseline)
+        s.close()
+
+
+class ShutdownTest(ServerTestCase):
+    # A long deadline, so that none of these tests can pass because of it.
+    OPTIONS = ("--workers", "4", "--shutdown-timeout-ms", "30000")
+
+    def test_request_in_flight_gets_its_response(self):
+        busy = self.compute_lasting(0.5)
+        s = connect()
+        s.settimeout(30)
+        s.sendall(busy)
+        time.sleep(0.1)
+
+        self.proc.send_signal(signal.SIGTERM)
+
+        reply = protocol.recv_frame(s)
+        self.assertEqual(reply[:2], (COMPUTE | RESPONSE, 1))
+        self.assertEqual(len(reply[2]), 8)
+        self.assertIsNone(protocol.recv_frame(s))
+        s.close()
+        self.assertEqual(self.proc.wait(timeout=10), 0)
+
+    def test_requests_not_started_are_dropped_without_a_reset(self):
+        # Fifty requests wait behind the one in flight, and the client
+        # sends a megabyte more after the signal. It must still receive
+        # the one response it is owed and then a clean end, not a reset.
+        busy = self.compute_lasting(0.5)
+        s = connect()
+        s.settimeout(30)
+        s.sendall(busy + protocol.encode(ECHO, 2, b"never started") * 50)
+        time.sleep(0.1)
+
+        self.proc.send_signal(signal.SIGTERM)
+
+        def send_ignoring_errors():
+            try:
+                s.sendall(protocol.encode(ECHO, 3, b"x" * 1024) * 1024)
+            except OSError:
+                pass
+
+        sender = threading.Thread(target=send_ignoring_errors)
+        sender.start()
+
+        self.assertEqual(protocol.recv_frame(s)[:2], (COMPUTE | RESPONSE, 1))
+        self.assertIsNone(protocol.recv_frame(s))
+        sender.join()
+        s.close()
+        self.assertEqual(self.proc.wait(timeout=10), 0)
+
+    def test_idle_connections_are_closed_at_once(self):
+        socks = [connect() for _ in range(30)]
+        for s in socks:
+            self.assertTrue(try_echo(s, b"hello"))
+
+        start = time.time()
+        self.proc.send_signal(signal.SIGTERM)
+        self.assertEqual(self.proc.wait(timeout=5), 0)
+        self.assertLess(time.time() - start, 1)
+
+        for s in socks:
+            self.assertIsNotNone(wait_closed(s, 2))
+            s.close()
+
+    def test_new_connections_are_refused_while_draining(self):
+        busy = self.compute_lasting(1)
+        s = connect()
+        s.settimeout(30)
+        s.sendall(busy)
+        time.sleep(0.1)
+
+        self.proc.send_signal(signal.SIGTERM)
+        time.sleep(0.2)
+
+        self.assertIsNone(self.proc.poll())
+        with self.assertRaises(OSError):
+            late = connect()
+            # Some systems complete the handshake from the backlog and
+            # only then reset the connection.
+            late.sendall(protocol.encode(PING, 1))
+            if late.recv(1) == b"":
+                raise ConnectionResetError("closed without an answer")
+
+        self.assertEqual(protocol.recv_frame(s)[:2], (COMPUTE | RESPONSE, 1))
+        s.close()
+        self.assertEqual(self.proc.wait(timeout=10), 0)
+
+
+class ShutdownDeadlineTest(ServerTestCase):
+    DEADLINE = 1.0
+    OPTIONS = (
+        "--workers",
+        "4",
+        "--shutdown-timeout-ms",
+        "1000",
+        "--output-high-water",
+        "65536",
+    )
+
+    def assert_exits_at_the_deadline(self, start):
+        self.assertEqual(self.proc.wait(timeout=10), 0)
+        elapsed = time.time() - start
+        self.assertGreater(elapsed, self.DEADLINE - 0.2)
+        self.assertLess(elapsed, self.DEADLINE + 2)
+
+    def test_client_that_never_reads_cannot_delay_shutdown(self):
+        frame = protocol.encode(ECHO, 1, os.urandom(64 * 1024))
+
+        slow = socket.socket()
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+        slow.connect(("127.0.0.1", PORT))
+        slow.setblocking(False)
+
+        # Send requests without reading until the socket refuses more.
+        # The server now holds responses it cannot deliver.
+        sent = 0
+        blocked_since = None
+        while sent < 64 * 1024 * 1024:
+            try:
+                sent += slow.send(frame[sent % len(frame) :])
+                blocked_since = None
+            except BlockingIOError:
+                now = time.time()
+                if blocked_since is None:
+                    blocked_since = now
+                if now - blocked_since > 0.3:
+                    break
+                time.sleep(0.01)
+
+        start = time.time()
+        self.proc.send_signal(signal.SIGTERM)
+
+        # It waits for this client as long as the deadline allows, and
+        # not a moment longer.
+        self.assert_exits_at_the_deadline(start)
+        slow.close()
+
+    def test_request_that_runs_for_minutes_cannot_delay_shutdown(self):
+        # The heaviest request the protocol allows: 100,000 passes over
+        # nearly a megabyte.
+        endless = protocol.encode(
+            COMPUTE,
+            1,
+            protocol.compute_payload(
+                protocol.MAX_COMPUTE_ITERATIONS,
+                b"x" * (protocol.DEFAULT_MAX_FRAME - 12),
+            ),
+        )
+        s = connect()
+        s.sendall(endless)
+        time.sleep(0.3)
+
+        start = time.time()
+        self.proc.send_signal(signal.SIGTERM)
+
+        self.assert_exits_at_the_deadline(start)
+        self.assertIsNotNone(wait_closed(s, 2))
+        s.close()
+
+
+class SecondSignalTest(ServerTestCase):
+    OPTIONS = ("--workers", "4", "--shutdown-timeout-ms", "30000")
+
+    def test_second_signal_ends_the_process_at_once(self):
+        endless = protocol.encode(
+            COMPUTE,
+            1,
+            protocol.compute_payload(
+                protocol.MAX_COMPUTE_ITERATIONS,
+                b"x" * (protocol.DEFAULT_MAX_FRAME - 12),
+            ),
+        )
+        s = connect()
+        s.sendall(endless)
+        time.sleep(0.3)
+
+        # The first signal starts a shutdown that has thirty seconds and
+        # a request that needs minutes.
+        self.proc.send_signal(signal.SIGINT)
+        time.sleep(0.5)
+        self.assertIsNone(self.proc.poll())
+
+        start = time.time()
+        self.proc.send_signal(signal.SIGINT)
+        self.assertEqual(self.proc.wait(timeout=5), -signal.SIGINT)
+        self.assertLess(time.time() - start, 1)
         s.close()
 
 
