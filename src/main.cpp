@@ -58,8 +58,7 @@ struct Completion {
 bool setNonBlocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
 
-    return flags >= 0 &&
-           fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0;
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0;
 }
 
 // Runs inside a worker thread
@@ -75,16 +74,14 @@ int main(int argc, char** argv) {
 
     if (!parseConfig(argc, argv, config, configError)) {
         std::cerr << configError << "\n"
-                  << "Usage: " << argv[0]
-                  << " [--port N] [--workers N]"
+                  << "Usage: " << argv[0] << " [--port N] [--workers N]"
                   << " [--max-connections N] [--backlog N]\n";
         return 1;
     }
 
     int wakePipe[2];
 
-    if (pipe(wakePipe) < 0 ||
-        !setNonBlocking(wakePipe[0]) ||
+    if (pipe(wakePipe) < 0 || !setNonBlocking(wakePipe[0]) ||
         !setNonBlocking(wakePipe[1])) {
         perror("pipe");
         return 1;
@@ -118,11 +115,10 @@ int main(int argc, char** argv) {
     address.sin_port = htons(static_cast<std::uint16_t>(config.port));
 
     // 2. Configure server
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR,
-                   &opt, sizeof(opt)) < 0 ||
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) <
+            0 ||
         !setNonBlocking(serverSocket) ||
-        bind(serverSocket,
-             reinterpret_cast<sockaddr*>(&address),
+        bind(serverSocket, reinterpret_cast<sockaddr*>(&address),
              sizeof(address)) < 0 ||
         listen(serverSocket, config.backlog) < 0) {
 
@@ -150,8 +146,7 @@ int main(int argc, char** argv) {
     std::unordered_map<int, Client> clients;
     std::uint64_t nextId = 1;
 
-    const auto maxConnections =
-        static_cast<std::size_t>(config.maxConnections);
+    const auto maxConnections = static_cast<std::size_t>(config.maxConnections);
 
     auto closeClient = [&](int fd) {
         close(fd);
@@ -175,9 +170,8 @@ int main(int argc, char** argv) {
         std::cerr << "accept: " << message << '\n';
     };
 
-    std::cout << "Listening on 127.0.0.1:" << config.port
-              << " with " << config.workers
-              << " workers (Ctrl+C to stop)" << std::endl;
+    std::cout << "Listening on 127.0.0.1:" << config.port << " with "
+              << config.workers << " workers (Ctrl+C to stop)" << std::endl;
 
     // 4. Main event loop
     while (running) {
@@ -187,15 +181,13 @@ int main(int argc, char** argv) {
             std::lock_guard<std::mutex> lock(completionMutex);
 
             while (!completions.empty()) {
-                Completion result =
-                    std::move(completions.front());
+                Completion result = std::move(completions.front());
 
                 completions.pop();
 
                 auto it = clients.find(result.fd);
 
-                if (it == clients.end() ||
-                    it->second.id != result.id)
+                if (it == clients.end() || it->second.id != result.id)
                     continue;
 
                 if (result.failed) {
@@ -237,11 +229,8 @@ int main(int argc, char** argv) {
 
         // 6. Sleep until a socket is ready or wake() is called. During an
         // accept backoff, also wake up on a timer to try accept() again.
-        int ready = poll(
-            fds.data(),
-            static_cast<nfds_t>(fds.size()),
-            acceptBackoff ? ACCEPT_RETRY_MS : -1
-        );
+        int ready = poll(fds.data(), static_cast<nfds_t>(fds.size()),
+                         acceptBackoff ? ACCEPT_RETRY_MS : -1);
 
         acceptBackoff = false;
 
@@ -266,19 +255,15 @@ int main(int argc, char** argv) {
         // 7. Accept new connections
         if (fds[0].revents & POLLIN) {
             while (clients.size() < maxConnections) {
-                int fd = accept(
-                    serverSocket, nullptr, nullptr
-                );
+                int fd = accept(serverSocket, nullptr, nullptr);
 
                 // Out of descriptors. On Linux the connection stays in
                 // the backlog and keeps the listening socket readable, so
                 // poll() would return at once, forever. Use the spare
                 // descriptor's slot to accept the connection and close it.
                 if (fd < 0 && (errno == EMFILE || errno == ENFILE)) {
-                    logAcceptError(
-                        "out of file descriptors, "
-                        "refusing new connections"
-                    );
+                    logAcceptError("out of file descriptors, "
+                                   "refusing new connections");
 
                     close(spareFd);
 
@@ -316,9 +301,7 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
-                clients.emplace(
-                    fd, Client{nextId++, false, "", 0}
-                );
+                clients.emplace(fd, Client{nextId++, false, "", 0});
             }
         }
 
@@ -344,23 +327,17 @@ int main(int argc, char** argv) {
                 bool failed = false;
 
                 while (client.sent < client.output.size()) {
-                    ssize_t n = send(
-                        fd,
-                        client.output.data() + client.sent,
-                        client.output.size() - client.sent,
-                        0
-                    );
+                    ssize_t n = send(fd, client.output.data() + client.sent,
+                                     client.output.size() - client.sent, 0);
 
                     if (n > 0) {
-                        client.sent +=
-                            static_cast<std::size_t>(n);
+                        client.sent += static_cast<std::size_t>(n);
                     }
                     else if (n < 0 && errno == EINTR) {
                         continue;
                     }
                     else if (n < 0 &&
-                            (errno == EAGAIN ||
-                             errno == EWOULDBLOCK)) {
+                             (errno == EAGAIN || errno == EWOULDBLOCK)) {
                         break;
                     }
                     else {
@@ -382,16 +359,13 @@ int main(int argc, char** argv) {
             else if (revents & POLLIN) {
                 char buffer[BUFFER_SIZE];
 
-                ssize_t n = recv(
-                    fd, buffer, sizeof(buffer), 0
-                );
+                ssize_t n = recv(fd, buffer, sizeof(buffer), 0);
 
                 if (n == 0) {
                     closeClient(fd);
                 }
                 else if (n < 0) {
-                    if (errno != EINTR &&
-                        errno != EAGAIN &&
+                    if (errno != EINTR && errno != EAGAIN &&
                         errno != EWOULDBLOCK) {
                         closeClient(fd);
                     }
@@ -400,52 +374,42 @@ int main(int argc, char** argv) {
                     std::uint64_t id = it->second.id;
                     it->second.processing = true;
 
-                    std::string message(
-                        buffer, static_cast<std::size_t>(n)
-                    );
+                    std::string message(buffer, static_cast<std::size_t>(n));
 
                     // 9. Submit processing to Thread Pool
                     try {
-                        pool.enqueue(
-                            [fd, id,
-                             message = std::move(message),
-                             &completionMutex,
-                             &completions]() mutable {
+                        pool.enqueue([fd, id, message = std::move(message),
+                                      &completionMutex,
+                                      &completions]() mutable {
+                            Completion result{fd, id, "", false};
 
-                                Completion result{fd, id, "", false};
-
-                                // An exception must still produce a
-                                // completion, or the client would stay
-                                // in the processing state forever.
-                                try {
-                                    result.response = processMessage(
-                                        std::move(message)
-                                    );
-                                }
-                                catch (...) {
-                                    result.failed = true;
-                                }
-
-                                bool wasEmpty;
-
-                                {
-                                    std::lock_guard<std::mutex>
-                                        lock(completionMutex);
-
-                                    wasEmpty = completions.empty();
-                                    completions.push(std::move(result));
-                                }
-
-                                // A non-empty queue already has a
-                                // wakeup on its way.
-                                if (wasEmpty)
-                                    wake();
+                            // An exception must still produce a
+                            // completion, or the client would stay
+                            // in the processing state forever.
+                            try {
+                                result.response =
+                                    processMessage(std::move(message));
+                            } catch (...) {
+                                result.failed = true;
                             }
-                        );
-                    }
-                    catch (const std::exception& e) {
-                        std::cerr << "Task error: "
-                                  << e.what() << '\n';
+
+                            bool wasEmpty;
+
+                            {
+                                std::lock_guard<std::mutex> lock(
+                                    completionMutex);
+
+                                wasEmpty = completions.empty();
+                                completions.push(std::move(result));
+                            }
+
+                            // A non-empty queue already has a
+                            // wakeup on its way.
+                            if (wasEmpty)
+                                wake();
+                        });
+                    } catch (const std::exception& e) {
+                        std::cerr << "Task error: " << e.what() << '\n';
                         closeClient(fd);
                     }
                 }

@@ -62,8 +62,7 @@ public:
         using ReturnType = std::invoke_result_t<F>;
 
         auto task = std::make_shared<std::packaged_task<ReturnType()>>(
-            std::forward<F>(f)
-        );
+            std::forward<F>(f));
 
         std::future<ReturnType> result = task->get_future();
 
