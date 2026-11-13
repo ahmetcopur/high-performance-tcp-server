@@ -7,7 +7,11 @@ Clients talk to it in a small binary protocol with length-prefixed
 frames: PING, ECHO, and COMPUTE (a hash loop that stands in for CPU
 work). The format is in [docs/protocol.md](docs/protocol.md).
 
-Timeouts, graceful shutdown, and an epoll backend are planned. See
+How connections move through their states, what times out and when, and
+every limit the server enforces are in
+[docs/architecture.md](docs/architecture.md).
+
+Graceful shutdown and an epoll backend are planned. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for what is done, what has been
 verified, and the open issues.
 
@@ -43,6 +47,13 @@ The default build type is `RelWithDebInfo`. Pick another one with
 | `--backlog N` | `SOMAXCONN` | Listen backlog. The kernel may cap it. |
 | `--max-frame N` | 1048576 | Largest frame length a client may send, in bytes. |
 | `--output-high-water N` | 4194304 | Unsent bytes per connection above which the server stops reading from it. |
+| `--idle-timeout-ms N` | 60000 | Closes a connection with nothing buffered and nothing in flight. |
+| `--partial-frame-timeout-ms N` | 10000 | Closes a connection whose frame started arriving and did not finish. |
+| `--write-stall-timeout-ms N` | 10000 | Closes a connection that takes none of its pending output. |
+| `--linger-timeout-ms N` | 2000 | After a framing error, how long to wait for the client to close. |
+
+Running the server with an unknown option prints this list with the
+defaults.
 
 The server stops on Ctrl+C or SIGTERM.
 
@@ -98,6 +109,6 @@ tests/         test_buffer.cpp, test_config.cpp, test_protocol.cpp,
                test_threadpool.cpp (GoogleTest)
                test_server.py (black-box, starts the real server)
                protocol.py (Python client for the protocol)
-docs/          protocol.md, PROGRESS.md
+docs/          architecture.md, protocol.md, PROGRESS.md
 benchmark.py   quick load script, not a rigorous benchmark
 ```

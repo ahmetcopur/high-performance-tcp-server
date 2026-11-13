@@ -10,7 +10,7 @@ comparable.
 - [x] 1. Repository and build infrastructure
 - [x] 2. Accept-path robustness and connection limits
 - [x] 3. Binary protocol and per-connection buffering
-- [ ] 4. Connection lifecycle, half-close, and timeouts
+- [x] 4. Connection lifecycle, half-close, and timeouts
 - [ ] 5. Graceful shutdown policy
 - [ ] 6. Refactor into modules
 - [ ] 7. Linux epoll backend
@@ -231,15 +231,104 @@ Not verified:
   was measured in this step.
 - Behaviour with thousands of connections at their memory limits.
 
+## Step 4: connection lifecycle and timeouts (2026-11-13)
+
+What changed: a connection is now in one of three states (Open,
+ReadClosed, Closing) and one of five phases (idle, partial frame, busy,
+writing, lingering), each phase but busy with a time limit. `POLLHUP`
+is no longer treated as a dead connection. After a framing error the
+server sends FIN and keeps reading until the client closes. All of it
+is described in [architecture.md](architecture.md).
+
+Decisions that add to the project brief:
+
+- **A fourth timeout, `--linger-timeout-ms`** (default 2 s), bounds the
+  wait for the client to close after a framing error.
+- **`shutdown(SHUT_WR)` is used in Closing, not in ReadClosed.** In
+  ReadClosed everything up to the peer's FIN has been read, so a plain
+  `close()` already sends FIN. In Closing the peer may still be sending,
+  which is where `close()` would turn into a reset.
+- **The idle clock does not run while a request is with a worker.** A
+  slow COMPUTE is the server's delay, not the client's.
+- **The partial-frame clock is not restarted by more bytes of the same
+  frame**, only by completing it.
+- **Options are parsed from a table**, and the usage message is
+  generated from it.
+
+Verified on the Mac, three `ctest` runs each, warnings as errors, no
+warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| Release | Apple clang 17 | 45 of 45 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 45 of 45 tests pass |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 45 of 45 tests pass |
+
+The 45 are 44 GoogleTest cases and the integration suite, which now has
+47 tests. None is skipped on macOS any more.
+
+Verified in the Linux container, three `ctest` runs each of Release,
+Debug with `ENABLE_ASAN`, and Debug with `ENABLE_TSAN`: 45 of 45, no
+warnings. Ten more runs of the integration suite under TSan on one CPU:
+no failures.
+
+The new tests against the server from before this change (commit
+`0d297dc`, which accepts the new options and ignores them):
+
+| Test | Before | Now |
+| --- | --- | --- |
+| Four half-close tests, 60 runs, Mac | 60 of 60 runs fail | 0 of 60 |
+| Idle timeout (3 tests), Mac | fail | pass |
+| Slowloris, Mac | fail | pass |
+| Client that never reads is cut off, Mac | fail | pass |
+| Descriptor count after 300 connections, Mac | fails, on the half-close connections | pass |
+| Client keeps sending after a bad length, 40 runs, Mac | 5 fail with a reset | 0 |
+| The same, Linux container | 1 fails with a reset | 0 |
+
+These pass before and after, so they guard against regressions but did
+not catch a fault: resets with a request in flight, the linger timeout
+(the old server closed at once), and a frame that finishes in time.
+
+One more test was checked the other way round. With the line that
+restarts the stall clock on every send removed, "large response read
+slowly is not cut off" fails after 0.77 s. With it, the test passes.
+
+Verified in CI, GitHub Actions run 43444250576 on commit `9288268`: all
+six jobs pass with 45 of 45 tests and no warnings. Three earlier runs
+failed, each because of a test and not the server:
+
+- **All three macOS jobs, commits `78e9bd3` and `cb44243`.** A test
+  with a reader taking 32 KiB every 30 ms against a 500 ms write-stall
+  limit. On the CI runner the pause took about 70 ms, and at that pace
+  the server really cannot send for more than 500 ms at a time (open
+  issue 17). Reproduced on the Mac by slowing the reader to 70 ms. The
+  test also had no teeth: it passed with the stall clock broken on
+  purpose. It was replaced by one large response read at a fixed rate.
+- **Ubuntu TSan, commit `41a0951`.** A test abandoned twenty of the
+  heaviest COMPUTE requests. They kept every worker busy, and the echo
+  after them timed out in the queue. The requests were made lighter.
+
+Not verified:
+
+- The default timeout values. Every timeout test runs with 500 ms.
+- The `SO_ERROR` log line on macOS. In the Linux container the tests
+  produce it ("Connection reset by peer"). On the Mac they never do,
+  because resets show up there as failed reads or writes.
+- Which branch each hangup takes. Nothing measures code coverage, so
+  "POLLHUP while not reading" may never have run.
+- The cost of scanning every connection for its deadline when there are
+  thousands of them.
+- How large the announcement steps described in open issue 17 are on
+  Linux. They were measured on macOS only.
+
+Note for step 7: the deadline scan is linear and runs every iteration.
+That is free while `poll()` rebuilds its set every iteration too. The
+epoll backend needs a heap or a timer wheel.
+
 ## Open issues
 
-1. **Half-close is broken on macOS.** `poll()` on macOS reports
-   `POLLIN|POLLHUP` as soon as the peer calls `shutdown(SHUT_WR)`, even
-   with unread data. The server closes on `POLLHUP` before reading
-   (`src/main.cpp`, the `POLLERR | POLLHUP | POLLNVAL` check). When the
-   FIN arrives before `recv()`, the request is dropped and the client
-   gets `ECONNRESET`. `test_half_close_still_gets_response` is skipped on
-   macOS until this is fixed in step 4. Remove the skip then.
+1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
+   handled by reading to the end, and the tests are no longer skipped.
 2. **Apple clang sanitizers do not start on the Mac.** With Xcode 16.3
    and Command Line Tools 26.2 on macOS 26.6.2, a TSan binary segfaults
    and an ASan binary hangs before `main`, even for a hello-world.
@@ -261,13 +350,8 @@ Not verified:
    on every check, which the descriptor exhaustion test takes away. The
    other undefined-behaviour checks and ASan are unaffected, and macOS
    keeps the check.
-9. **Closing after a framing error can lose the ERROR frame.** The
-   server stops reading, sends the ERROR, and closes. If the client is
-   still sending, unread bytes are left in the socket at `close()`, and
-   the kernel then sends RST instead of FIN. A reset can discard data
-   the client has not read yet. The tests avoid this by sending nothing
-   after the bad length. Step 4 should send FIN with
-   `shutdown(SHUT_WR)` and keep reading until the client closes.
+9. *Resolved in step 4.* After a framing error the server sends FIN and
+   reads until the client closes.
 10. **The COMPUTE limit bounds iterations, not work.** The cost is
     iterations times data length. The largest request, 100,000 passes
     over about 1 MiB, keeps one worker busy for a long time, cannot be
@@ -277,6 +361,19 @@ Not verified:
 12. **`Buffer` keeps its capacity.** After one large frame a connection
     holds that much memory until it closes, even when idle. It is
     bounded by the limits, but not returned.
-13. **A client that never reads is throttled, not dropped.** It keeps
-    its connection and its buffered output forever. Step 4 adds the
-    write-stall timeout.
+13. *Resolved in step 4.* The write-stall timeout closes it.
+14. **A timeout closes with a plain `close()`.** If input is unread at
+    that moment the client sees a reset and not a clean end. No message
+    tells the client why it was dropped.
+15. **A request with a worker has no time limit.** Together with issue
+    10 this means one connection can occupy a worker for a long time.
+16. **The partial-frame limit is on the whole frame.** A 1 MiB frame
+    over a link slower than about 100 KiB/s cannot finish in the default
+    10 s and is cut off.
+17. **The write-stall limit sees progress only in steps.** A sender
+    learns that the reader has made room when the reader's kernel
+    announces it, and macOS announces it about once per half receive
+    buffer. Until then a slow reader looks stalled. With the default
+    10 s limit and a 4 MiB receive buffer, a client reading slower than
+    about 200 KiB/s can be cut off although it is reading steadily.
+    This cannot be fixed inside the server, only by choosing the limit.
