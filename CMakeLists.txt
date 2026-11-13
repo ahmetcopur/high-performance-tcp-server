@@ -53,7 +53,8 @@ endif()
 
 add_library(tcpserver STATIC
     src/Buffer.cpp
-    src/Config.cpp)
+    src/Config.cpp
+    src/Protocol.cpp)
 target_include_directories(tcpserver PUBLIC include)
 target_link_libraries(tcpserver
     PUBLIC Threads::Threads
@@ -73,7 +74,7 @@ if(BUILD_TESTING)
     FetchContent_MakeAvailable(googletest)
     include(GoogleTest)
 
-    foreach(name test_buffer test_config test_threadpool)
+    foreach(name test_buffer test_config test_protocol test_threadpool)
         add_executable(${name} tests/${name}.cpp)
         target_link_libraries(${name} PRIVATE
             tcpserver tcpserver_warnings GTest::gtest_main)
