@@ -9,7 +9,7 @@ comparable.
 - [x] 0. Verify on macOS and set a baseline
 - [x] 1. Repository and build infrastructure
 - [x] 2. Accept-path robustness and connection limits
-- [ ] 3. Binary protocol and per-connection buffering
+- [x] 3. Binary protocol and per-connection buffering
 - [ ] 4. Connection lifecycle, half-close, and timeouts
 - [ ] 5. Graceful shutdown policy
 - [ ] 6. Refactor into modules
@@ -161,6 +161,76 @@ Not verified:
   no test observes the kernel queue.
 - The default limit of 10,000 connections at that scale.
 
+## Step 3: binary protocol and buffering (2026-11-13)
+
+What changed: the server speaks the framed protocol in
+[protocol.md](protocol.md) instead of echoing raw bytes. New units are
+`Buffer` (byte queue with a read offset) and `Protocol` (encoder,
+decoder, request validation, the COMPUTE hash). Each connection has an
+input buffer, an output buffer with a high and a low watermark, and at
+most one request with a worker.
+
+Decisions that differ from, or add to, the project brief:
+
+- **No queue of parsed requests.** The brief asked for a FIFO of up to
+  64 parsed requests per connection. With 1 MiB frames that queue could
+  hold 64 MiB per connection. Waiting requests now stay as raw bytes in
+  the input buffer and are decoded one at a time. Approved by the
+  project owner on 2026-11-13.
+- **The input buffer holds one frame of the largest size**, not more.
+  Anything beyond that waits in the kernel socket buffer.
+- **`--max-frame` limits the length field**, so the largest payload is
+  the limit minus 8.
+- **PING ignores its payload** and answers with an empty one.
+- **Error code 7, bad request**, was added for a COMPUTE payload that
+  is too short or asks for more than 100,000 iterations.
+- **`main.cpp` and `ThreadPool.h` were clang-formatted** in their own
+  commit before the rewrite. The compiled objects were byte-identical
+  before and after.
+
+Verified on the Mac, three `ctest` runs each, warnings as errors, no
+warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| Release | Apple clang 17 | 44 of 44 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 44 of 44 tests pass |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 44 of 44 tests pass |
+
+The 44 are 43 GoogleTest cases (Buffer 7, Config 7, Protocol 24,
+ThreadPool 5) and the integration suite, which now has 32 tests (30 run
+on macOS, the two half-close tests are skipped).
+
+Verified in the Linux container, three `ctest` runs each of Release,
+Debug with `ENABLE_ASAN`, and Debug with `ENABLE_TSAN`: 44 of 44, no
+warnings. All 32 integration tests run there.
+
+Repeated runs of the integration suite, looking for timing problems: 15
+runs under TSan in the Linux container limited to one CPU, and 10 runs
+of the Release build on the Mac. No failures.
+
+The new tests fail when the behaviour they check is removed (Mac,
+Release build):
+
+| Change to the server | Result |
+| --- | --- |
+| Started with a high watermark it can never reach | The slow-reader test fails. The server took all 64 MiB offered and grew by 67 MiB. With the watermark at 1 MiB it took 2.2 MiB and grew by 3.5 MiB. |
+| Decoding continues while a request is with a worker | Both ordering tests fail, because PING answers overtake earlier requests. |
+
+Verified in CI, GitHub Actions run 43404943388 on commit `9aafdcf`: all
+six jobs pass on the first run, each with 44 of 44 tests and no
+warnings.
+
+Not verified:
+
+- Error codes 5 (server busy) and 6 (internal error) are defined and
+  never sent.
+- The exact watermark boundaries. The slow-reader test shows that
+  throttling starts and that the connection recovers, not at which byte.
+- Any performance effect of the protocol and the extra copies. Nothing
+  was measured in this step.
+- Behaviour with thousands of connections at their memory limits.
+
 ## Open issues
 
 1. **Half-close is broken on macOS.** `poll()` on macOS reports
@@ -177,9 +247,7 @@ Not verified:
    `-DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++`.
 3. **No test triggers a worker exception.** The `Completion::failed`
    path in the server has never run under any test.
-4. **Existing sources are not clang-formatted.** `src/main.cpp` differs
-   from `.clang-format` output on about 126 lines because it is
-   hand-wrapped near 60 columns. Reformat when it is split in step 6.
+4. *Resolved in step 3.* All sources are now clang-formatted.
 5. **`.clang-format` is not enforced in CI.**
 6. **The default connection limit is above common descriptor limits.**
    `--max-connections` defaults to 10,000, while `ulimit -n` is often
@@ -193,3 +261,22 @@ Not verified:
    on every check, which the descriptor exhaustion test takes away. The
    other undefined-behaviour checks and ASan are unaffected, and macOS
    keeps the check.
+9. **Closing after a framing error can lose the ERROR frame.** The
+   server stops reading, sends the ERROR, and closes. If the client is
+   still sending, unread bytes are left in the socket at `close()`, and
+   the kernel then sends RST instead of FIN. A reset can discard data
+   the client has not read yet. The tests avoid this by sending nothing
+   after the bad length. Step 4 should send FIN with
+   `shutdown(SHUT_WR)` and keep reading until the client closes.
+10. **The COMPUTE limit bounds iterations, not work.** The cost is
+    iterations times data length. The largest request, 100,000 passes
+    over about 1 MiB, keeps one worker busy for a long time, cannot be
+    cancelled, and makes shutdown wait for it.
+11. **A worker exception closes the connection.** Step 8 turns it into
+    ERROR 6.
+12. **`Buffer` keeps its capacity.** After one large frame a connection
+    holds that much memory until it closes, even when idle. It is
+    bounded by the limits, but not returned.
+13. **A client that never reads is throttled, not dropped.** It keeps
+    its connection and its buffered output forever. Step 4 adds the
+    write-stall timeout.

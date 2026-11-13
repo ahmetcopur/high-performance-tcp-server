@@ -3,9 +3,12 @@
 A concurrent TCP server in C++17 on POSIX. A single-threaded `poll()` event
 loop owns all sockets and hands each request to a worker thread pool.
 
-The server currently echoes whatever it receives. Framing, a binary
-protocol, timeouts, graceful shutdown, and an epoll backend are planned.
-See [docs/PROGRESS.md](docs/PROGRESS.md) for what is done, what has been
+Clients talk to it in a small binary protocol with length-prefixed
+frames: PING, ECHO, and COMPUTE (a hash loop that stands in for CPU
+work). The format is in [docs/protocol.md](docs/protocol.md).
+
+Timeouts, graceful shutdown, and an epoll backend are planned. See
+[docs/PROGRESS.md](docs/PROGRESS.md) for what is done, what has been
 verified, and the open issues.
 
 ## Requirements
@@ -38,6 +41,8 @@ The default build type is `RelWithDebInfo`. Pick another one with
 | `--workers N` | 8 | Worker threads that process requests. |
 | `--max-connections N` | 10000 | Connections served at once. Further ones wait in the backlog. |
 | `--backlog N` | `SOMAXCONN` | Listen backlog. The kernel may cap it. |
+| `--max-frame N` | 1048576 | Largest frame length a client may send, in bytes. |
+| `--output-high-water N` | 4194304 | Unsent bytes per connection above which the server stops reading from it. |
 
 The server stops on Ctrl+C or SIGTERM.
 
@@ -49,6 +54,20 @@ Two limits protect the accept path, and they behave differently:
   only to close it at once, so the client is turned away instead of
   hanging. This happens first when `--max-connections` is higher than
   `ulimit -n` allows.
+
+## Per-connection limits
+
+Each connection is served one request at a time, and responses leave in
+the order the requests arrived. What a connection can hold in memory is
+bounded:
+
+- **Input:** at most one frame of the largest size (`--max-frame` plus
+  4 bytes). Further requests wait in the kernel's socket buffer.
+- **In flight:** one request with a worker.
+- **Output:** once unsent responses reach `--output-high-water`, the
+  server stops reading and decoding for that connection. It resumes at
+  half that amount. A client that never reads its responses is slowed
+  down by TCP flow control and cannot make the server buffer without end.
 
 ## Build options
 
@@ -73,9 +92,12 @@ another clang by adding, for example,
 ## Layout
 
 ```text
-include/   Config.h, ThreadPool.h
-src/       main.cpp, Config.cpp
-tests/     test_config.cpp, test_threadpool.cpp (GoogleTest)
-           test_server.py (black-box, starts the real server)
-docs/      PROGRESS.md
+include/       Buffer.h, Config.h, Protocol.h, ThreadPool.h
+src/           main.cpp, Buffer.cpp, Config.cpp, Protocol.cpp
+tests/         test_buffer.cpp, test_config.cpp, test_protocol.cpp,
+               test_threadpool.cpp (GoogleTest)
+               test_server.py (black-box, starts the real server)
+               protocol.py (Python client for the protocol)
+docs/          protocol.md, PROGRESS.md
+benchmark.py   quick load script, not a rigorous benchmark
 ```
