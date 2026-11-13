@@ -55,6 +55,64 @@ def rss_bytes(pid):
     return int(out.strip()) * 1024
 
 
+def count_fds(pid):
+    # Number of descriptors the process has open.
+    if os.path.isdir(f"/proc/{pid}/fd"):
+        return len(os.listdir(f"/proc/{pid}/fd"))
+
+    out = subprocess.run(
+        ["lsof", "-p", str(pid), "-Ff"], capture_output=True, text=True
+    ).stdout
+    return sum(
+        1 for line in out.splitlines() if line[:1] == "f" and line[1:].isdigit()
+    )
+
+
+def settled_fd_count(pid):
+    # The count once it has stopped changing, so that connections the
+    # server is still closing are not counted.
+    previous = count_fds(pid)
+    while True:
+        time.sleep(0.2)
+        current = count_fds(pid)
+        if current == previous:
+            return current
+        previous = current
+
+
+def wait_for_fd_count(pid, expected, timeout=5):
+    # Returns the count as soon as it equals expected, or the last count
+    # seen when the time is up.
+    deadline = time.time() + timeout
+    while True:
+        count = count_fds(pid)
+        if count == expected or time.time() > deadline:
+            return count
+        time.sleep(0.05)
+
+
+def wait_closed(s, timeout):
+    # Seconds until the server ends the connection, reading and dropping
+    # anything it sends first. None if it is still open after timeout.
+    # A reset counts as closed.
+    start = time.time()
+    s.settimeout(timeout)
+    try:
+        while s.recv(65536):
+            pass
+    except (ConnectionResetError, BrokenPipeError):
+        pass
+    except socket.timeout:
+        return None
+    return time.time() - start
+
+
+def reset(s):
+    # SO_LINGER with a zero timeout makes close() send RST instead of FIN.
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    s.close()
+
+
 def try_echo(s, data, request_id=1):
     # True if the server echoed data, False if it closed the connection.
     try:
@@ -356,13 +414,6 @@ class ServerTest(ServerTestCase):
         self.assertEqual(reply, (ECHO | RESPONSE, 1, payload))
         s.close()
 
-    # macOS reports POLLHUP as soon as the peer half-closes, and the server
-    # closes on POLLHUP without reading first, so these fail about one run
-    # in three there. Remove the skips when step 4 fixes the server.
-    @unittest.skipIf(
-        sys.platform == "darwin",
-        "known issue: POLLHUP on half-close, see docs/PROGRESS.md",
-    )
     def test_half_close_still_gets_response(self):
         s = connect()
         s.sendall(protocol.encode(ECHO, 1, b"last words"))
@@ -373,10 +424,6 @@ class ServerTest(ServerTestCase):
         self.assertIsNone(protocol.recv_frame(s))
         s.close()
 
-    @unittest.skipIf(
-        sys.platform == "darwin",
-        "known issue: POLLHUP on half-close, see docs/PROGRESS.md",
-    )
     def test_half_close_after_pipelined_requests(self):
         s = connect()
         s.sendall(
@@ -393,6 +440,64 @@ class ServerTest(ServerTestCase):
         self.assertIsNone(protocol.recv_frame(s))
         s.close()
 
+    def test_half_close_without_requests(self):
+        s = connect()
+        s.shutdown(socket.SHUT_WR)
+        self.assertIsNone(protocol.recv_frame(s))
+        s.close()
+
+    def test_half_close_inside_a_frame(self):
+        # The frame can never be completed, so there is nothing to answer.
+        s = connect()
+        s.sendall(
+            protocol.encode(ECHO, 1, b"whole")
+            + protocol.encode(ECHO, 2, b"never finished")[:15]
+        )
+        s.shutdown(socket.SHUT_WR)
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 1, b"whole"))
+        self.assertIsNone(protocol.recv_frame(s))
+        s.close()
+
+    def test_error_reaches_a_client_that_keeps_sending(self):
+        # A megabyte follows the bad length. If the server closed with
+        # those bytes unread, the kernel would answer with a reset, which
+        # can wipe out the ERROR frame before the client reads it.
+        s = connect()
+        s.settimeout(10)
+
+        def send_ignoring_errors():
+            try:
+                s.sendall(struct.pack(">I", 3) + b"\xff" * (1024 * 1024))
+            except OSError:
+                pass
+
+        sender = threading.Thread(target=send_ignoring_errors)
+        sender.start()
+        self.assert_error(
+            protocol.recv_frame(s), protocol.ERR_MALFORMED_FRAME, 0
+        )
+        self.assertIsNone(protocol.recv_frame(s))
+        sender.join()
+        s.close()
+
+    def test_reset_with_a_request_in_flight(self):
+        # The worker finishes a request whose connection is already gone.
+        # Its result must be dropped, not delivered to a newer connection.
+        heavy = protocol.encode(
+            COMPUTE,
+            1,
+            protocol.compute_payload(
+                protocol.MAX_COMPUTE_ITERATIONS, b"x" * 2048
+            ),
+        )
+        for _ in range(20):
+            s = connect()
+            s.sendall(heavy)
+            reset(s)
+            fresh = connect()
+            self.assert_echo(fresh, b"mine", request_id=77)
+            fresh.close()
+
     def test_survives_abrupt_disconnects(self):
         # Clients that vanish with a request in flight, or halfway
         # through sending one.
@@ -406,14 +511,9 @@ class ServerTest(ServerTestCase):
         s.close()
 
     def test_survives_reset_burst(self):
-        # SO_LINGER with a zero timeout makes close() send RST instead of
-        # FIN. Some of these resets arrive before the server calls accept().
+        # Some of these resets arrive before the server calls accept().
         for _ in range(200):
-            s = connect()
-            s.setsockopt(
-                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
-            )
-            s.close()
+            reset(connect())
         s = connect()
         self.assert_echo(s, b"still alive")
         s.close()
@@ -434,6 +534,272 @@ class ServerTest(ServerTestCase):
         self.proc.send_signal(signal.SIGINT)
         self.assertEqual(self.proc.wait(timeout=2), 0)
         idle.close()
+
+
+class FdLeakTest(ServerTestCase):
+    def test_every_way_of_ending_a_connection_frees_its_descriptor(self):
+        pid = self.proc.pid
+        baseline = settled_fd_count(pid)
+        frame = protocol.encode(ECHO, 1, b"x" * 1000)
+        heavy = protocol.encode(
+            COMPUTE, 1, protocol.compute_payload(20000, b"x" * 1024)
+        )
+
+        for i in range(300):
+            s = connect()
+            kind = i % 7
+
+            if kind == 0:
+                self.assert_echo(s, b"hello")
+                s.close()
+            elif kind == 1:
+                s.close()
+            elif kind == 2:
+                s.sendall(frame[:9])
+                s.close()
+            elif kind == 3:
+                s.sendall(heavy)
+                reset(s)
+            elif kind == 4:
+                s.sendall(frame)
+                s.shutdown(socket.SHUT_WR)
+                self.assertEqual(protocol.recv_frame(s)[0], ECHO | RESPONSE)
+                self.assertIsNone(protocol.recv_frame(s))
+                s.close()
+            elif kind == 5:
+                s.sendall(struct.pack(">I", 2))
+                self.assertEqual(protocol.recv_frame(s)[0], ERROR)
+                self.assertIsNone(protocol.recv_frame(s))
+                s.close()
+            else:
+                s.sendall(heavy)
+                s.close()
+
+        self.assertEqual(wait_for_fd_count(pid, baseline), baseline)
+        self.assertIsNone(self.proc.poll())
+
+
+class IdleTimeoutTest(ServerTestCase):
+    TIMEOUT = 0.5
+    OPTIONS = ("--workers", "4", "--idle-timeout-ms", "500")
+
+    def assert_closed_by_timeout(self, s):
+        elapsed = wait_closed(s, 5)
+        self.assertIsNotNone(elapsed)
+        self.assertGreater(elapsed, self.TIMEOUT - 0.1)
+        self.assertLess(elapsed, self.TIMEOUT + 2)
+
+    def test_idle_connection_is_closed(self):
+        s = connect()
+        self.assert_closed_by_timeout(s)
+        s.close()
+
+    def test_idle_connections_give_their_descriptors_back(self):
+        baseline = settled_fd_count(self.proc.pid)
+        socks = [connect() for _ in range(30)]
+        for s in socks:
+            self.assertIsNotNone(wait_closed(s, 5))
+        self.assertEqual(wait_for_fd_count(self.proc.pid, baseline), baseline)
+        for s in socks:
+            s.close()
+
+    def test_activity_restarts_the_timer(self):
+        # Requests arrive more often than the timeout, for three times
+        # its length. The connection has to survive that and then be
+        # closed once it goes quiet.
+        s = connect()
+        for i in range(8):
+            self.assertEqual(
+                protocol.request(s, PING, i), (PING | RESPONSE, i, b"")
+            )
+            time.sleep(0.2)
+        self.assert_echo(s, b"still here")
+        self.assert_closed_by_timeout(s)
+        s.close()
+
+    def test_request_with_a_worker_is_not_idle(self):
+        # Grow the work until one request takes well over twice the idle
+        # timeout, and check that its answer still arrives.
+        s = connect()
+        s.settimeout(60)
+        size = 256
+        while True:
+            start = time.time()
+            reply = protocol.request(
+                s,
+                COMPUTE,
+                size,
+                protocol.compute_payload(
+                    protocol.MAX_COMPUTE_ITERATIONS, b"x" * size
+                ),
+            )
+            elapsed = time.time() - start
+            self.assertEqual(reply[:2], (COMPUTE | RESPONSE, size))
+            if elapsed > self.TIMEOUT * 2.5:
+                break
+            size *= 2
+            self.assertLess(size, protocol.DEFAULT_MAX_FRAME // 2)
+        s.close()
+
+
+class PartialFrameTimeoutTest(ServerTestCase):
+    TIMEOUT = 0.5
+    OPTIONS = ("--workers", "4", "--partial-frame-timeout-ms", "500")
+
+    def test_slowloris_is_cut_off(self):
+        # One byte every 100 ms. Each byte is activity, but the frame is
+        # no nearer to complete in any useful time. The last byte is never
+        # sent, so the server can only have closed because of the timer.
+        frame = protocol.encode(ECHO, 1, b"x" * 100)
+        s = connect()
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.settimeout(0.1)
+
+        start = time.time()
+        closed_after = None
+        sent = 0
+
+        for i in range(len(frame) - 1):
+            try:
+                s.sendall(frame[i : i + 1])
+                sent += 1
+                # Doubles as the 100 ms pause between bytes.
+                if s.recv(1) == b"":
+                    closed_after = time.time() - start
+                    break
+                self.fail("the server answered an unfinished frame")
+            except socket.timeout:
+                continue
+            except (ConnectionResetError, BrokenPipeError):
+                closed_after = time.time() - start
+                break
+
+        self.assertIsNotNone(closed_after)
+        self.assertGreater(closed_after, self.TIMEOUT - 0.1)
+        self.assertLess(closed_after, self.TIMEOUT + 2)
+        self.assertLess(sent, len(frame) - 1)
+        s.close()
+
+    def test_frame_finished_in_time_is_served(self):
+        frame = protocol.encode(ECHO, 2, b"slow but fine")
+        s = connect()
+        s.sendall(frame[:6])
+        time.sleep(0.2)
+        s.sendall(frame[6:])
+        self.assertEqual(
+            protocol.recv_frame(s), (ECHO | RESPONSE, 2, b"slow but fine")
+        )
+        s.close()
+
+    def test_timer_starts_again_for_each_frame(self):
+        # Four frames, each taking 300 ms to arrive: 1.2 s in total,
+        # more than twice the timeout, and none of them late.
+        s = connect()
+        for i in range(4):
+            frame = protocol.encode(ECHO, i, b"frame")
+            s.sendall(frame[:6])
+            time.sleep(0.3)
+            s.sendall(frame[6:])
+            self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, i, b"frame"))
+        s.close()
+
+
+class WriteStallTimeoutTest(ServerTestCase):
+    OPTIONS = (
+        "--workers",
+        "4",
+        "--write-stall-timeout-ms",
+        "500",
+        "--output-high-water",
+        "65536",
+    )
+
+    def test_client_that_never_reads_is_cut_off(self):
+        frame = protocol.encode(ECHO, 1, os.urandom(64 * 1024))
+        baseline = settled_fd_count(self.proc.pid)
+
+        slow = socket.socket()
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
+        slow.connect(("127.0.0.1", PORT))
+        slow.setblocking(False)
+
+        # Send requests without reading until the socket refuses more.
+        sent = 0
+        blocked_since = None
+        while sent < 64 * 1024 * 1024:
+            try:
+                sent += slow.send(frame[sent % len(frame) :])
+                blocked_since = None
+            except BlockingIOError:
+                now = time.time()
+                if blocked_since is None:
+                    blocked_since = now
+                if now - blocked_since > 0.3:
+                    break
+                time.sleep(0.01)
+            except (ConnectionResetError, BrokenPipeError):
+                break
+
+        # The server has output it cannot deliver. Without reading a
+        # byte, wait until it gives the connection up.
+        self.assertEqual(
+            wait_for_fd_count(self.proc.pid, baseline), baseline
+        )
+
+        # Reading now finds what the kernel already held, then the end.
+        slow.setblocking(True)
+        self.assertIsNotNone(wait_closed(slow, 5))
+        slow.close()
+
+        other = connect()
+        self.assert_echo(other, b"not affected")
+        other.close()
+
+    def test_slow_but_steady_reader_is_not_cut_off(self):
+        # 2 MiB of responses read in small sips with pauses. The whole
+        # exchange takes several times the timeout, but output keeps
+        # moving, so the stall timer never runs out.
+        payload = os.urandom(32 * 1024)
+        count = 64
+        s = socket.socket()
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32 * 1024)
+        s.connect(("127.0.0.1", PORT))
+        s.settimeout(10)
+
+        requests = b"".join(
+            protocol.encode(ECHO, i, payload) for i in range(count)
+        )
+        sender = threading.Thread(target=s.sendall, args=(requests,))
+        sender.start()
+
+        start = time.time()
+        for i in range(count):
+            self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, i, payload))
+            time.sleep(0.03)
+        sender.join()
+
+        self.assertGreater(time.time() - start, 1.5)
+        s.close()
+
+
+class LingerTimeoutTest(ServerTestCase):
+    OPTIONS = ("--workers", "4", "--linger-timeout-ms", "500")
+
+    def test_connection_is_closed_even_if_the_peer_never_closes(self):
+        baseline = settled_fd_count(self.proc.pid)
+
+        s = connect()
+        s.sendall(struct.pack(">I", 1))
+        self.assert_error(
+            protocol.recv_frame(s), protocol.ERR_MALFORMED_FRAME, 0
+        )
+        self.assertIsNone(protocol.recv_frame(s))
+
+        # The server has sent its FIN and is waiting for ours, which
+        # never comes. Its descriptor must be freed all the same.
+        self.assertEqual(wait_for_fd_count(self.proc.pid, baseline), baseline)
+        s.close()
 
 
 class LargeFrameTest(ServerTestCase):

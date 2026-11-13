@@ -44,8 +44,36 @@ void wake() {
     errno = saved;
 }
 
+// Where a connection is in its life. docs/architecture.md has the
+// transitions and the rules that hold in each state.
+enum class State {
+    // Requests are read and answered.
+    Open,
+
+    // The peer has finished sending. Nothing more is read. Requests
+    // already received are still answered, then the connection closes.
+    ReadClosed,
+
+    // A framing error ended the conversation. The error is sent, then
+    // our side of the connection is shut down. Input is read only to be
+    // thrown away, until the peer closes too.
+    Closing,
+};
+
+// What a connection is waiting for right now. Every phase except Busy
+// has a time limit.
+enum class Phase {
+    Idle,      // nothing buffered and no request in flight
+    Partial,   // a frame has started to arrive and is not complete
+    Busy,      // a worker has the request
+    Writing,   // output is waiting for the peer to take it
+    Lingering, // our side is shut down, waiting for the peer to close
+};
+
 struct Client {
     std::uint64_t id = 0;
+
+    State state = State::Open;
 
     // Bytes received and not yet decoded. Requests wait here as raw
     // bytes until the request before them has been answered.
@@ -62,10 +90,32 @@ struct Client {
     // it has drained to the low watermark.
     bool throttled = false;
 
-    // Nothing more will be read. Either the peer finished sending, or a
-    // bad length made the rest of the stream unusable.
-    bool readClosed = false;
+    // In Closing: the output is sent and shutdown(SHUT_WR) was called.
+    bool finSent = false;
+
+    Phase phase = Phase::Idle;
+
+    // When the current phase began, or when output last made progress.
+    std::chrono::steady_clock::time_point phaseSince;
 };
+
+Phase phaseOf(const Client& client) {
+    if (client.output.size() > 0)
+        return Phase::Writing;
+
+    if (client.state == State::Closing)
+        return Phase::Lingering;
+
+    if (client.processing)
+        return Phase::Busy;
+
+    // Complete frames never wait here while nothing is in flight, so
+    // whatever is left is the start of a frame.
+    if (client.input.size() > 0)
+        return Phase::Partial;
+
+    return Phase::Idle;
+}
 
 struct Completion {
     int fd;
@@ -201,6 +251,16 @@ int main(int argc, char** argv) {
         static_cast<std::size_t>(config.outputHighWater);
     const std::size_t outputLowWater = outputHighWater / 2;
 
+    // Time limit of each phase in milliseconds, indexed by Phase. A
+    // request with a worker takes as long as it takes.
+    const int phaseLimitMs[] = {
+        config.idleTimeoutMs,         // Idle
+        config.partialFrameTimeoutMs, // Partial
+        -1,                           // Busy
+        config.writeStallTimeoutMs,   // Writing
+        config.lingerTimeoutMs,       // Lingering
+    };
+
     auto closeClient = [&](int fd) {
         close(fd);
         clients.erase(fd);
@@ -211,16 +271,31 @@ int main(int argc, char** argv) {
     bool acceptBackoff = false;
 
     std::chrono::steady_clock::time_point lastAcceptLog;
+    std::chrono::steady_clock::time_point lastConnectionLog;
 
-    // A flood of failing connections must not become a flood of log lines.
-    auto logAcceptError = [&](const char* message) {
+    // A flood of failures must not become a flood of log lines. Each
+    // source writes at most one line per second.
+    auto logLimited = [](std::chrono::steady_clock::time_point& last,
+                         const char* source, const char* message) {
         auto now = std::chrono::steady_clock::now();
 
-        if (now - lastAcceptLog < std::chrono::seconds(1))
+        if (now - last < std::chrono::seconds(1))
             return;
 
-        lastAcceptLog = now;
-        std::cerr << "accept: " << message << '\n';
+        last = now;
+        std::cerr << source << ": " << message << '\n';
+    };
+
+    // The same test decides whether to ask poll() for POLLIN and whether
+    // a reported hangup still has input behind it.
+    auto wantsRead = [&](const Client& client) {
+        if (client.state == State::ReadClosed)
+            return false;
+
+        if (client.state == State::Closing)
+            return true;
+
+        return !client.throttled && client.input.size() < inputLimit;
     };
 
     auto queueResponse = [&](Client& client, std::string_view response) {
@@ -236,13 +311,14 @@ int main(int argc, char** argv) {
     auto serveRequests = [&](int fd, Client& client) {
         using namespace protocol;
 
-        while (!client.processing && !client.throttled) {
+        while (client.state != State::Closing && !client.processing &&
+               !client.throttled) {
             DecodeResult decoded = decodeFrame(client.input.view(), maxFrame);
 
             if (decoded.status == DecodeStatus::Incomplete) {
                 // Once reading is over, a partial frame can never be
                 // completed.
-                if (client.readClosed)
+                if (client.state == State::ReadClosed)
                     client.input.clear();
 
                 break;
@@ -250,13 +326,17 @@ int main(int argc, char** argv) {
 
             if (decoded.status == DecodeStatus::Invalid) {
                 // Without a usable length there is no telling where the
-                // next frame starts. Answer, read nothing more, and let
-                // the connection close once the output is sent.
+                // next frame starts. Answer and serve nothing more. If
+                // the peer has already finished sending, the connection
+                // closes once the answer is out.
                 queueResponse(client, encodeError(0, decoded.error,
                                                   errorName(decoded.error)));
 
                 client.input.clear();
-                client.readClosed = true;
+
+                if (client.state == State::Open)
+                    client.state = State::Closing;
+
                 break;
             }
 
@@ -316,14 +396,16 @@ int main(int argc, char** argv) {
 
                 client.processing = false;
                 client.input.clear();
-                client.readClosed = true;
+                client.state = State::Closing;
             }
         }
     };
 
-    // Nothing left to read, decode, compute, or send.
+    // The peer has closed and there is nothing left to decode, compute,
+    // or send. Nothing is unread either, so close() ends the connection
+    // with FIN and not with a reset.
     auto finished = [](const Client& client) {
-        return client.readClosed && !client.processing &&
+        return client.state == State::ReadClosed && !client.processing &&
                client.input.size() == 0 && client.output.size() == 0;
     };
 
@@ -364,38 +446,74 @@ int main(int argc, char** argv) {
             serveRequests(result.fd, client);
         }
 
-        // 5. Build poll descriptor list
+        // 5. Build poll descriptor list, and on the way close connections
+        // that have stayed in one phase for too long. The scan is linear,
+        // which costs nothing extra while poll() is linear too.
         std::vector<pollfd> fds;
         fds.reserve(clients.size() + 2);
 
-        // At the connection limit the listening socket is left out, so
-        // new connections wait in the kernel backlog and poll() does not
-        // keep returning for a socket we are not going to accept from.
-        short listenEvents = 0;
-
-        if (clients.size() < maxConnections && !acceptBackoff)
-            listenEvents = POLLIN;
-
-        fds.push_back({serverSocket, listenEvents, 0});
+        fds.push_back({serverSocket, 0, 0});
         fds.push_back({wakePipe[0], POLLIN, 0});
 
-        for (const auto& [fd, client] : clients) {
+        auto now = std::chrono::steady_clock::now();
+        long long timeoutMs = acceptBackoff ? ACCEPT_RETRY_MS : -1;
+
+        for (auto it = clients.begin(); it != clients.end();) {
+            int fd = it->first;
+            Client& client = it->second;
+
+            Phase phase = phaseOf(client);
+
+            if (phase != client.phase) {
+                client.phase = phase;
+                client.phaseSince = now;
+            }
+
+            int limitMs = phaseLimitMs[static_cast<int>(phase)];
+
+            if (limitMs >= 0) {
+                auto deadline =
+                    client.phaseSince + std::chrono::milliseconds(limitMs);
+
+                long long remainingMs =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        deadline - now)
+                        .count();
+
+                if (remainingMs <= 0) {
+                    close(fd);
+                    it = clients.erase(it);
+                    continue;
+                }
+
+                // One more than the truncated remainder, so that poll()
+                // returns after the deadline and not just before it.
+                if (timeoutMs < 0 || remainingMs + 1 < timeoutMs)
+                    timeoutMs = remainingMs + 1;
+            }
+
             int events = 0;
 
             if (client.output.size() > 0)
                 events |= POLLOUT;
 
-            if (!client.readClosed && !client.throttled &&
-                client.input.size() < inputLimit)
+            if (wantsRead(client))
                 events |= POLLIN;
 
             fds.push_back({fd, static_cast<short>(events), 0});
+            ++it;
         }
 
-        // 6. Sleep until a socket is ready or wake() is called. During an
-        // accept backoff, also wake up on a timer to try accept() again.
+        // At the connection limit the listening socket is left out, so
+        // new connections wait in the kernel backlog and poll() does not
+        // keep returning for a socket we are not going to accept from.
+        if (clients.size() < maxConnections && !acceptBackoff)
+            fds[0].events = POLLIN;
+
+        // 6. Sleep until a socket is ready, wake() is called, or the
+        // nearest deadline arrives.
         int ready = poll(fds.data(), static_cast<nfds_t>(fds.size()),
-                         acceptBackoff ? ACCEPT_RETRY_MS : -1);
+                         static_cast<int>(timeoutMs));
 
         acceptBackoff = false;
 
@@ -406,6 +524,8 @@ int main(int argc, char** argv) {
             perror("poll");
             break;
         }
+
+        now = std::chrono::steady_clock::now();
 
         // Empty the wake pipe. This must happen before the completion
         // queue is drained at the top of the next iteration, otherwise
@@ -427,8 +547,9 @@ int main(int argc, char** argv) {
                 // poll() would return at once, forever. Use the spare
                 // descriptor's slot to accept the connection and close it.
                 if (fd < 0 && (errno == EMFILE || errno == ENFILE)) {
-                    logAcceptError("out of file descriptors, "
-                                   "refusing new connections");
+                    logLimited(lastAcceptLog, "accept",
+                               "out of file descriptors, "
+                               "refusing new connections");
 
                     close(spareFd);
 
@@ -454,7 +575,8 @@ int main(int argc, char** argv) {
                     // a connection in the backlog, so back off instead
                     // of polling the listening socket again right away.
                     if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                        logAcceptError(std::strerror(errno));
+                        logLimited(lastAcceptLog, "accept",
+                                   std::strerror(errno));
                         acceptBackoff = true;
                     }
 
@@ -468,6 +590,7 @@ int main(int argc, char** argv) {
 
                 Client client;
                 client.id = nextId++;
+                client.phaseSince = now;
 
                 clients.emplace(fd, std::move(client));
             }
@@ -485,7 +608,28 @@ int main(int argc, char** argv) {
             Client& client = it->second;
             short revents = fds[i].revents;
 
-            if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            if (revents & (POLLERR | POLLNVAL)) {
+                int error = 0;
+                socklen_t length = sizeof(error);
+
+                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) ==
+                        0 &&
+                    error != 0)
+                    logLimited(lastConnectionLog, "connection",
+                               std::strerror(error));
+
+                closeClient(fd);
+                continue;
+            }
+
+            bool reading = wantsRead(client);
+
+            // POLLHUP says the peer will send no more. While we are still
+            // reading, recv() below collects what is left and then
+            // reports the end, and responses we owe can still go out.
+            // When we are not reading, there is nothing left to learn
+            // from this socket and nobody to write to.
+            if ((revents & POLLHUP) && !reading) {
                 closeClient(fd);
                 continue;
             }
@@ -500,6 +644,7 @@ int main(int argc, char** argv) {
 
                     if (n > 0) {
                         client.output.consume(static_cast<std::size_t>(n));
+                        client.phaseSince = now;
                     }
                     else if (n < 0 && errno == EINTR) {
                         continue;
@@ -519,22 +664,30 @@ int main(int argc, char** argv) {
             }
 
             // Socket is ready for reading. Take everything that is there,
-            // up to the input limit, before decoding any of it.
-            if (!failed && (revents & POLLIN)) {
+            // up to the input limit, before decoding any of it. In Closing
+            // the bytes are dropped, so the limit only bounds one round.
+            if (!failed && reading && (revents & (POLLIN | POLLHUP))) {
                 char chunk[READ_CHUNK];
 
-                while (client.input.size() < inputLimit) {
-                    std::size_t room = std::min(
-                        sizeof(chunk), inputLimit - client.input.size());
+                std::size_t room = inputLimit;
 
-                    ssize_t n = recv(fd, chunk, room, 0);
+                if (client.state == State::Open)
+                    room -= client.input.size();
+
+                while (room > 0) {
+                    ssize_t n =
+                        recv(fd, chunk, std::min(sizeof(chunk), room), 0);
 
                     if (n > 0) {
-                        client.input.append(
-                            {chunk, static_cast<std::size_t>(n)});
+                        auto count = static_cast<std::size_t>(n);
+
+                        if (client.state == State::Open)
+                            client.input.append({chunk, count});
+
+                        room -= count;
                     }
                     else if (n == 0) {
-                        client.readClosed = true;
+                        client.state = State::ReadClosed;
                         break;
                     }
                     else if (errno == EINTR) {
@@ -557,6 +710,16 @@ int main(int argc, char** argv) {
 
             // 9. Decode what arrived and hand requests to the Thread Pool
             serveRequests(fd, client);
+
+            // The error has gone out. Send FIN now and keep the socket
+            // open for reading, so that bytes the peer is still sending
+            // do not turn our close() into a reset that could destroy
+            // the error before the peer has read it.
+            if (client.state == State::Closing && client.output.size() == 0 &&
+                !client.finSent) {
+                shutdown(fd, SHUT_WR);
+                client.finSent = true;
+            }
 
             if (finished(client))
                 closeClient(fd);
