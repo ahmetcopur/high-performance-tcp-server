@@ -11,7 +11,7 @@ comparable.
 - [x] 2. Accept-path robustness and connection limits
 - [x] 3. Binary protocol and per-connection buffering
 - [x] 4. Connection lifecycle, half-close, and timeouts
-- [ ] 5. Graceful shutdown policy
+- [x] 5. Graceful shutdown policy
 - [ ] 6. Refactor into modules
 - [ ] 7. Linux epoll backend
 - [ ] 8. Thread pool engineering
@@ -325,6 +325,67 @@ Note for step 7: the deadline scan is linear and runs every iteration.
 That is free while `poll()` rebuilds its set every iteration too. The
 epoll backend needs a heap or a timer wheel.
 
+## Step 5: graceful shutdown (2026-11-13)
+
+What changed: the first SIGINT or SIGTERM closes the listening socket,
+drops requests that have not been started, lets the request each
+connection has with a worker finish and sends its response, then closes.
+`--shutdown-timeout-ms` (default 5 s) bounds all of it. A second signal
+ends the process at once. The policy and the order of destruction are in
+[architecture.md](architecture.md).
+
+Decisions that add to the project brief:
+
+- **Requests received but not started are dropped.** "Already queued"
+  is taken to mean handed to the worker pool. With one request per
+  connection in flight, that is at most one per connection.
+- **A draining connection ends through Closing**, with FIN and a wait
+  for the client's close, so that a client still sending cannot turn
+  the close into a reset that destroys its last response.
+- **Abandoned work is cancelled at the end of a shutdown.** COMPUTE
+  checks a flag before each pass. Without it, joining the workers held
+  the process long after the deadline.
+- **The second signal uses the default action.** The handler restores
+  it, so the process dies by the signal and its exit status says so.
+- **Reaching the deadline still exits with code 0.** One log line
+  reports how many connections were cut.
+
+Verified on the Mac, three `ctest` runs each, warnings as errors, no
+warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| Release | Apple clang 17 | 47 of 47 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 47 of 47 tests pass |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 47 of 47 tests pass |
+
+The 47 are 46 GoogleTest cases and the integration suite, which now has
+54 tests.
+
+Verified in the Linux container, three `ctest` runs each of Release,
+Debug with `ENABLE_ASAN`, and Debug with `ENABLE_TSAN`: 47 of 47, no
+warnings.
+
+Verified in CI, GitHub Actions run 43448740809 on commit `97dc100`: all
+six jobs pass with 47 of 47 tests and no warnings. The macOS ASan job
+needed a second attempt. The first was cancelled after 15 minutes in
+the queue because GitHub had no macOS runner free to take it. It never
+started, so that says nothing about the code.
+
+The new tests against the server from before this change (commit
+`4f1f1d4`), on the Mac: six of the seven shutdown tests fail. The one
+that passes, idle connections closed at once, was already true. With
+only the cancellation of abandoned work removed from the current
+server, the test with a request that runs for minutes times out.
+
+Not verified:
+
+- That every worker has stopped before the process exits, other than
+  by the process exiting in time.
+- A shutdown with thousands of connections owed a response.
+- The default deadline of 5 s. The deadline tests use 1 s.
+- An exception escaping the event loop. Nothing provokes one.
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -354,8 +415,9 @@ epoll backend needs a heap or a timer wheel.
    reads until the client closes.
 10. **The COMPUTE limit bounds iterations, not work.** The cost is
     iterations times data length. The largest request, 100,000 passes
-    over about 1 MiB, keeps one worker busy for a long time, cannot be
-    cancelled, and makes shutdown wait for it.
+    over about 1 MiB, keeps one worker busy for a long time. Since step
+    5 it is cancelled at the end of a shutdown, but not when its own
+    connection goes away.
 11. **A worker exception closes the connection.** Step 8 turns it into
     ERROR 6.
 12. **`Buffer` keeps its capacity.** After one large frame a connection
@@ -377,3 +439,9 @@ epoll backend needs a heap or a timer wheel.
     10 s limit and a 4 MiB receive buffer, a client reading slower than
     about 200 KiB/s can be cut off although it is reading steadily.
     This cannot be fixed inside the server, only by choosing the limit.
+18. **Requests received but not started are dropped at shutdown without
+    a word.** The client sees the connection end after the response to
+    an earlier request and has to work out for itself which requests
+    were never run.
+19. **An exception escaping the event loop ends the process through
+    `std::terminate`.** No connection is closed in an orderly way.

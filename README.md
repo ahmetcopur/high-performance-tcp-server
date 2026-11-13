@@ -11,7 +11,7 @@ How connections move through their states, what times out and when, and
 every limit the server enforces are in
 [docs/architecture.md](docs/architecture.md).
 
-Graceful shutdown and an epoll backend are planned. See
+An epoll backend is planned. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for what is done, what has been
 verified, and the open issues.
 
@@ -51,11 +51,15 @@ The default build type is `RelWithDebInfo`. Pick another one with
 | `--partial-frame-timeout-ms N` | 10000 | Closes a connection whose frame started arriving and did not finish. |
 | `--write-stall-timeout-ms N` | 10000 | Closes a connection that takes none of its pending output. |
 | `--linger-timeout-ms N` | 2000 | After a framing error, how long to wait for the client to close. |
+| `--shutdown-timeout-ms N` | 5000 | After SIGINT or SIGTERM, how long connections get to receive what they are owed. |
 
 Running the server with an unknown option prints this list with the
 defaults.
 
-The server stops on Ctrl+C or SIGTERM.
+Ctrl+C or SIGTERM starts an orderly shutdown: no new connections, no new
+requests, and every request already with a worker still gets its
+response, within `--shutdown-timeout-ms`. A second signal ends the
+process at once.
 
 Two limits protect the accept path, and they behave differently:
 

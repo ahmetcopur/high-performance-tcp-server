@@ -168,6 +168,68 @@ once per iteration and passes it to `poll()` as its timeout. This is a
 linear scan, which adds nothing while the poll set is rebuilt every
 iteration anyway.
 
+## Shutdown
+
+The first SIGINT or SIGTERM starts an orderly shutdown. A second one
+ends the process at once.
+
+### What the first signal does
+
+1. **The listening socket is closed.** New connections are refused.
+2. **No new request is started.** Bytes already received but not yet
+   decoded are dropped, on every connection.
+3. **Connections that are owed nothing are closed** straight away.
+4. **Connections that are owed something go to Closing.** That is a
+   request with a worker, or a response not fully sent. The request
+   finishes, its response is sent, then the server sends FIN and keeps
+   reading and dropping input until the client closes. This is the same
+   path as after a framing error, for the same reason: a client that is
+   still sending must not turn the close into a reset that destroys the
+   response it was just sent.
+5. **The process exits with code 0** when the last connection is gone.
+
+The whole of this has a deadline, `--shutdown-timeout-ms` (default 5 s),
+counted from the signal. When it passes, the remaining connections are
+closed as they are, one line is logged, and the process still exits with
+code 0. The per-phase timeouts keep running during a shutdown, so a
+connection can also be dropped earlier by its own limit.
+
+A client that received its last response and then neither sends nor
+closes holds the shutdown for the linger timeout (2 s by default), or
+until the deadline if that is sooner.
+
+### What happens to work in progress
+
+A request with a worker is given the chance to finish, up to the
+deadline. Requests still running after that belong to connections that
+no longer exist. They are told to stop: the COMPUTE loop checks a flag
+before every pass over its data, so even the heaviest request gives up
+within one pass. Without this, joining the worker threads could hold the
+process for minutes after every connection was closed.
+
+### The second signal
+
+The signal handler restores the default action for SIGINT and SIGTERM
+after the first signal. A second signal therefore terminates the process
+the way an unhandled signal does. Nothing is flushed, and the exit
+status is the signal, not 0.
+
+### Order of destruction
+
+The steps at the end of `main` are written out in the order they must
+happen, and do not rely on the order in which variables are declared:
+
+1. Connections are closed, then the listening socket and the spare
+   descriptor.
+2. Workers are told to give up their work and are joined. Until this
+   returns, a worker may still push to the completion queue and write to
+   the wake pipe.
+3. Only then is the wake pipe closed. After the join this is the only
+   thread, so the queue and its mutex can be destroyed in any order.
+
+An exception that escapes the event loop is not caught. The process
+ends through `std::terminate` without running any of this.
+
 ## Limits
 
 | What | Limit | When it is reached |
@@ -179,6 +241,7 @@ iteration anyway.
 | Requests in flight per connection | 1 | Further requests wait as bytes in the input buffer. |
 | Output per connection | `--output-high-water` | The server stops reading and decoding for that connection until the output drains to half. |
 | COMPUTE iterations | 100,000 | ERROR 7, the connection stays open. |
+| Shutdown | `--shutdown-timeout-ms` | Remaining connections are closed as they are and work in progress is abandoned. |
 
 The worker pool's task queue has no limit yet. It holds at most one
 task per connection.
