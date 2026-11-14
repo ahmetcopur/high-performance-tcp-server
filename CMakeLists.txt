@@ -93,6 +93,7 @@ if(BUILD_TESTING)
             test_config
             test_connection
             test_file_descriptor
+            test_histogram
             test_poller
             test_protocol
             test_request_handler
@@ -108,6 +109,9 @@ if(BUILD_TESTING)
     endforeach()
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+    # The histogram belongs to the load generator, not to the server.
+    target_include_directories(test_histogram PRIVATE benchmarks/loadgen)
 
     # The whole integration suite once per poller the platform has.
     set(pollers poll)
