@@ -1,0 +1,3 @@
+# The image copies nothing from the project. The source is mounted when
+# the container runs, so nothing needs to be sent to the Docker daemon.
+*
