@@ -18,9 +18,11 @@ short interest(bool read, bool write) {
 
 } // namespace
 
-void PollPoller::add(int fd, bool read, bool write) {
+bool PollPoller::add(int fd, bool read, bool write) {
     indexOf[fd] = fds.size();
     fds.push_back({fd, interest(read, write), 0});
+
+    return true;
 }
 
 void PollPoller::modify(int fd, bool read, bool write) {

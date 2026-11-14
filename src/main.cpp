@@ -55,7 +55,8 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, onSignal);
 
     std::cout << "Listening on 127.0.0.1:" << config.port << " with "
-              << config.workers << " workers (Ctrl+C to stop)" << std::endl;
+              << config.workers << " workers, waiting with "
+              << pollerName(config.poller) << " (Ctrl+C to stop)" << std::endl;
 
     server->run();
 

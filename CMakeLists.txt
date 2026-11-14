@@ -62,6 +62,11 @@ add_library(tcpserver STATIC
     src/TcpServer.cpp
     src/TimerQueue.cpp
     src/Waker.cpp)
+# epoll exists only on Linux.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(tcpserver PRIVATE src/EpollPoller.cpp)
+endif()
+
 target_include_directories(tcpserver PUBLIC include)
 target_link_libraries(tcpserver
     PUBLIC Threads::Threads
@@ -101,15 +106,27 @@ if(BUILD_TESTING)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-    add_test(NAME integration
-        COMMAND Python3::Interpreter
-                ${CMAKE_SOURCE_DIR}/tests/test_server.py
-                $<TARGET_FILE:server>)
+    # The whole integration suite once per poller the platform has.
+    set(pollers poll)
 
-    # The tests stop the server with SIGKILL, so a TSan report would never
-    # reach the exit code. Fail on the report text instead.
-    set_tests_properties(integration PROPERTIES
-        TIMEOUT 300
-        FAIL_REGULAR_EXPRESSION
-        "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        list(APPEND pollers epoll)
+    endif()
+
+    foreach(poller ${pollers})
+        add_test(NAME integration_${poller}
+            COMMAND Python3::Interpreter
+                    ${CMAKE_SOURCE_DIR}/tests/test_server.py
+                    $<TARGET_FILE:server>
+                    --poller ${poller})
+
+        # The tests stop the server with SIGKILL, so a TSan report would
+        # never reach the exit code. Fail on the report text instead.
+        # Both runs use the same port, so they must not overlap.
+        set_tests_properties(integration_${poller} PROPERTIES
+            TIMEOUT 300
+            RESOURCE_LOCK tcp_port_18080
+            FAIL_REGULAR_EXPRESSION
+            "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
+    endforeach()
 endif()

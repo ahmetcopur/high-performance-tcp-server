@@ -41,12 +41,47 @@ const Option OPTIONS[] = {
     {"--shutdown-timeout-ms", &Config::shutdownTimeoutMs, 1, INT_MAX},
 };
 
+bool parsePoller(const std::string& value, PollerKind& poller,
+                 std::string& error) {
+    if (value == "poll") {
+        poller = PollerKind::Poll;
+        return true;
+    }
+
+    if (value == "epoll") {
+#ifdef __linux__
+        poller = PollerKind::Epoll;
+        return true;
+#else
+        error = "--poller epoll is only available on Linux";
+        return false;
+#endif
+    }
+
+    error = "invalid value for --poller: " + value;
+    return false;
+}
+
 } // namespace
 
 bool parseConfig(int argc, const char* const* argv, Config& config,
                  std::string& error) {
     for (int i = 1; i < argc; i += 2) {
         std::string name = argv[i];
+
+        // The one option whose value is a word and not a number.
+        if (name == "--poller") {
+            if (i + 1 >= argc) {
+                error = name + " needs a value";
+                return false;
+            }
+
+            if (!parsePoller(argv[i + 1], config.poller, error))
+                return false;
+
+            continue;
+        }
+
         const Option* option = nullptr;
 
         for (const Option& candidate : OPTIONS) {
@@ -74,9 +109,17 @@ bool parseConfig(int argc, const char* const* argv, Config& config,
     return true;
 }
 
+const char* pollerName(PollerKind kind) {
+    return kind == PollerKind::Epoll ? "epoll" : "poll";
+}
+
 std::string optionSummary() {
     Config defaults;
     std::string summary;
+
+    summary += "  --poller poll|epoll   (default ";
+    summary += pollerName(defaults.poller);
+    summary += ")\n";
 
     for (const Option& option : OPTIONS) {
         summary += "  ";

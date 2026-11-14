@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Config.h"
 #include "Poller.h"
 #include "Waker.h"
 
@@ -71,8 +72,9 @@ private:
     bool stopped = false;
 
 public:
-    // Throws std::system_error if the waker cannot be created.
-    EventLoop();
+    // Throws std::system_error if the poller or the waker cannot be
+    // created.
+    explicit EventLoop(PollerKind kind);
 
     // For registering descriptors. Only for the loop's own thread.
     Poller& poller() {

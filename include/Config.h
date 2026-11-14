@@ -4,7 +4,20 @@
 
 #include <sys/socket.h>
 
+// The system call the event loop waits with.
+enum class PollerKind {
+    Poll,
+    Epoll,
+};
+
 struct Config {
+    // epoll exists only on Linux, and is the default there.
+#ifdef __linux__
+    PollerKind poller = PollerKind::Epoll;
+#else
+    PollerKind poller = PollerKind::Poll;
+#endif
+
     int port = 8080;
     int workers = 8;
     int maxConnections = 10000;
@@ -44,3 +57,6 @@ bool parseConfig(int argc, const char* const* argv, Config& config,
 
 // One line per option, for the usage message.
 std::string optionSummary();
+
+// "poll" or "epoll".
+const char* pollerName(PollerKind kind);

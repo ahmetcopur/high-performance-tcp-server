@@ -18,7 +18,7 @@ private:
     std::unordered_map<int, std::size_t> indexOf;
 
 public:
-    void add(int fd, bool read, bool write) override;
+    bool add(int fd, bool read, bool write) override;
     void modify(int fd, bool read, bool write) override;
     void remove(int fd) override;
     bool wait(int timeoutMs, std::vector<PollEvent>& events) override;

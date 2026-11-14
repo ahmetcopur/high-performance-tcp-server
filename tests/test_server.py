@@ -3,7 +3,7 @@ Black-box tests for the server. They start the real binary and talk to
 it over TCP with the protocol in docs/protocol.md.
 
 Usage:
-    python3 tests/test_server.py path/to/server
+    python3 tests/test_server.py path/to/server [--poller poll|epoll]
 """
 
 import os
@@ -23,6 +23,10 @@ from protocol import COMPUTE, ECHO, ERROR, PING, RESPONSE, STATS
 
 SERVER = "./server"
 PORT = 18080
+
+# Options given to every server the tests start, set from the command
+# line. Used to run the whole suite against one poller.
+SERVER_OPTIONS = []
 
 
 def connect():
@@ -128,7 +132,7 @@ def start_server(*options, fd_limit=None):
             resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))
 
     proc = subprocess.Popen(
-        [SERVER, "--port", str(PORT), *options],
+        [SERVER, "--port", str(PORT), *SERVER_OPTIONS, *options],
         stdout=subprocess.DEVNULL,
         preexec_fn=limit_fds,
     )
@@ -555,6 +559,22 @@ class ServerTest(ServerTestCase):
                 protocol.recv_frame(s),
                 (ECHO | RESPONSE, i, f"client-{i:04d}".encode()),
             )
+            s.close()
+
+    def test_idle_connections_cost_no_cpu(self):
+        # A socket with room in its send buffer is always writable. If
+        # the server watched for that while it had nothing to send, it
+        # would be woken without pause.
+        socks = [connect() for _ in range(200)]
+        for i, s in enumerate(socks):
+            self.assert_echo(s, b"hello", request_id=i)
+
+        before = cpu_seconds(self.proc.pid)
+        time.sleep(2)
+        used = cpu_seconds(self.proc.pid) - before
+        self.assertLess(used, 0.5)
+
+        for s in socks:
             s.close()
 
     def test_sigint_stops_server(self):
@@ -1290,4 +1310,8 @@ class FdExhaustionTest(ServerTestCase):
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         SERVER = sys.argv.pop(1)
+    if "--poller" in sys.argv:
+        at = sys.argv.index("--poller")
+        SERVER_OPTIONS = sys.argv[at : at + 2]
+        del sys.argv[at : at + 2]
     unittest.main()

@@ -18,13 +18,15 @@ struct PollEvent {
 
 // Waits for descriptors to become ready. The event loop is written
 // against this interface, so that the system call behind it can be
-// replaced: poll() today, epoll on Linux later.
+// chosen: poll() everywhere, or epoll on Linux.
 class Poller {
 public:
     virtual ~Poller() = default;
 
     // Starts watching a descriptor for the given kinds of readiness.
-    virtual void add(int fd, bool read, bool write) = 0;
+    // Returns false if the system refused, which can happen when a limit
+    // on watched descriptors is reached.
+    virtual bool add(int fd, bool read, bool write) = 0;
 
     // Changes what a watched descriptor is watched for. Calling it with
     // what is already set is allowed and cheap.

@@ -59,7 +59,7 @@ std::string processRequest(protocol::Frame request,
 } // namespace
 
 TcpServer::TcpServer(const Config& serverConfig)
-    : config(serverConfig), limits(config),
+    : config(serverConfig), limits(config), loop(config.poller),
       pool(static_cast<std::size_t>(config.workers)) {
     listener.reset(socket(AF_INET, SOCK_STREAM, 0));
 
@@ -92,7 +92,8 @@ TcpServer::TcpServer(const Config& serverConfig)
     if (!spare.valid())
         fail("open /dev/null");
 
-    loop.poller().add(listener.get(), true, false);
+    if (!loop.poller().add(listener.get(), true, false))
+        fail("watching the listening socket");
 }
 
 // Workers post to the loop, so they must be gone before it is. run()
@@ -382,7 +383,11 @@ void TcpServer::acceptConnections(Clock::time_point now) {
 
         int fd = socket.get();
 
-        loop.poller().add(fd, true, false);
+        // The connection is dropped again if it cannot be watched.
+        if (!loop.poller().add(fd, true, false)) {
+            logLimited(lastAcceptLog, "accept", std::strerror(errno));
+            continue;
+        }
 
         auto added = connections.emplace(
             std::piecewise_construct, std::forward_as_tuple(fd),

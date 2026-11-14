@@ -132,3 +132,46 @@ TEST(Config, SummaryListsEveryOptionWithItsDefault) {
     EXPECT_NE(summary.find("--linger-timeout-ms N   (default 2000)"),
               std::string::npos);
 }
+
+TEST(Config, PollerDefaultsToEpollOnLinuxAndPollElsewhere) {
+    Config config;
+
+#ifdef __linux__
+    EXPECT_EQ(config.poller, PollerKind::Epoll);
+#else
+    EXPECT_EQ(config.poller, PollerKind::Poll);
+#endif
+}
+
+TEST(Config, PollerCanBeSetToPoll) {
+    Config config;
+    std::string error;
+
+    ASSERT_TRUE(parse({"--poller", "poll", "--port", "9000"}, config, error));
+
+    EXPECT_EQ(config.poller, PollerKind::Poll);
+    EXPECT_EQ(config.port, 9000);
+}
+
+TEST(Config, EpollIsAcceptedOnlyOnLinux) {
+    Config config;
+    std::string error;
+
+#ifdef __linux__
+    ASSERT_TRUE(parse({"--poller", "epoll"}, config, error));
+    EXPECT_EQ(config.poller, PollerKind::Epoll);
+#else
+    EXPECT_FALSE(parse({"--poller", "epoll"}, config, error));
+    EXPECT_NE(error.find("only available on Linux"), std::string::npos);
+#endif
+}
+
+TEST(Config, RejectsUnknownPollersAndAMissingValue) {
+    EXPECT_TRUE(fails({"--poller", "kqueue"}));
+    EXPECT_TRUE(fails({"--poller", ""}));
+    EXPECT_TRUE(fails({"--poller"}));
+}
+
+TEST(Config, SummaryListsThePoller) {
+    EXPECT_NE(optionSummary().find("--poller poll|epoll"), std::string::npos);
+}
