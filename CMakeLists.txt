@@ -59,7 +59,9 @@ add_library(tcpserver STATIC
     src/FileDescriptor.cpp
     src/PollPoller.cpp
     src/Protocol.cpp
-    src/TcpServer.cpp)
+    src/TcpServer.cpp
+    src/TimerQueue.cpp
+    src/Waker.cpp)
 target_include_directories(tcpserver PUBLIC include)
 target_link_libraries(tcpserver
     PUBLIC Threads::Threads
@@ -86,11 +88,15 @@ if(BUILD_TESTING)
             test_file_descriptor
             test_poller
             test_protocol
-            test_threadpool)
+            test_threadpool
+            test_timer_queue
+            test_waker)
         add_executable(${name} tests/${name}.cpp)
         target_link_libraries(${name} PRIVATE
             tcpserver tcpserver_warnings GTest::gtest_main)
-        gtest_discover_tests(${name})
+        # Discovery runs the binary to list its tests. Under a sanitizer
+        # on a busy machine that can take longer than the default 5 s.
+        gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
     endforeach()
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
