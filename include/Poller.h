@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Config.h"
+
+#include <memory>
 #include <vector>
 
 // What happened on one descriptor.
@@ -42,3 +45,8 @@ public:
     // events.
     virtual bool wait(int timeoutMs, std::vector<PollEvent>& events) = 0;
 };
+
+// The poller for the given kind. Config refuses epoll where it does not
+// exist, so asking for it there gives poll. Throws std::system_error if
+// the poller cannot be created.
+std::unique_ptr<Poller> makePoller(PollerKind kind);

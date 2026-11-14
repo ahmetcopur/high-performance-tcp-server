@@ -1,28 +1,10 @@
 #include "EventLoop.h"
 
-#include "EpollPoller.h"
-#include "PollPoller.h"
-
 #include <cerrno>
 #include <cstdio>
 #include <system_error>
 #include <utility>
 #include <vector>
-
-namespace {
-
-std::unique_ptr<Poller> makePoller(PollerKind kind) {
-#ifdef __linux__
-    if (kind == PollerKind::Epoll)
-        return std::make_unique<EpollPoller>();
-#endif
-
-    // Config refuses epoll where it does not exist, so this is poll.
-    (void)kind;
-    return std::make_unique<PollPoller>();
-}
-
-} // namespace
 
 EventLoop::EventLoop(PollerKind kind) : watcher(makePoller(kind)) {
     if (!watcher->add(waker.fd(), true, false))

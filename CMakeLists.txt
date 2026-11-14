@@ -58,6 +58,7 @@ add_library(tcpserver STATIC
     src/EventLoop.cpp
     src/FileDescriptor.cpp
     src/PollPoller.cpp
+    src/Poller.cpp
     src/Protocol.cpp
     src/RequestHandler.cpp
     src/TcpServer.cpp
@@ -76,6 +77,38 @@ target_link_libraries(tcpserver
 
 add_executable(server src/main.cpp)
 target_link_libraries(server PRIVATE tcpserver tcpserver_warnings)
+
+# The load generator for the benchmarks. It uses the server's protocol
+# and poller code.
+add_executable(loadgen benchmarks/loadgen/loadgen.cpp)
+target_include_directories(loadgen PRIVATE benchmarks/loadgen)
+target_link_libraries(loadgen PRIVATE tcpserver tcpserver_warnings)
+
+# What this build is, for the benchmark results. A number without its
+# compiler, flags and build type cannot be compared with anything.
+string(TOUPPER "${CMAKE_BUILD_TYPE}" build_type_upper)
+set(build_type_flags "${CMAKE_CXX_FLAGS_${build_type_upper}}")
+
+if(ENABLE_ASAN)
+    set(sanitizer "address,undefined")
+elseif(ENABLE_TSAN)
+    set(sanitizer "thread")
+else()
+    set(sanitizer "none")
+endif()
+
+file(WRITE ${CMAKE_BINARY_DIR}/build_info.json
+"{
+  \"compiler\": \"${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}\",
+  \"compiler_path\": \"${CMAKE_CXX_COMPILER}\",
+  \"cxx_standard\": \"${CMAKE_CXX_STANDARD}\",
+  \"build_type\": \"${CMAKE_BUILD_TYPE}\",
+  \"flags\": \"${CMAKE_CXX_FLAGS} ${build_type_flags}\",
+  \"sanitizer\": \"${sanitizer}\",
+  \"system\": \"${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION}\",
+  \"processor\": \"${CMAKE_SYSTEM_PROCESSOR}\"
+}
+")
 
 include(CTest)
 if(BUILD_TESTING)
@@ -136,4 +169,18 @@ if(BUILD_TESTING)
             FAIL_REGULAR_EXPRESSION
             "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
     endforeach()
+
+    # The load generator against the real server. It measures time, so it
+    # takes the same lock and does not run beside the integration suite.
+    add_test(NAME loadgen
+        COMMAND Python3::Interpreter
+                ${CMAKE_SOURCE_DIR}/tests/test_loadgen.py
+                $<TARGET_FILE:server>
+                $<TARGET_FILE:loadgen>)
+
+    set_tests_properties(loadgen PROPERTIES
+        TIMEOUT 300
+        RESOURCE_LOCK tcp_port_18080
+        FAIL_REGULAR_EXPRESSION
+        "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
 endif()
