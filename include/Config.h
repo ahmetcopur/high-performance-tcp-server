@@ -23,6 +23,13 @@ struct Config {
     int maxConnections = 10000;
     int backlog = SOMAXCONN;
 
+    // How many requests may wait for a worker. A request that finds the
+    // queue full is answered with "server busy".
+    int queueCapacity = 1024;
+
+    // If not zero, one line of counters is logged this often.
+    int statsIntervalMs = 0;
+
     // Largest value a frame's length field may have.
     int maxFrame = 1 << 20;
 

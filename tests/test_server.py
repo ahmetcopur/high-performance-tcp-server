@@ -126,7 +126,7 @@ def try_echo(s, data, request_id=1):
         return False
 
 
-def start_server(*options, fd_limit=None):
+def start_server(*options, fd_limit=None, capture_stderr=False):
     def limit_fds():
         if fd_limit is not None:
             resource.setrlimit(resource.RLIMIT_NOFILE, (fd_limit, fd_limit))
@@ -134,6 +134,8 @@ def start_server(*options, fd_limit=None):
     proc = subprocess.Popen(
         [SERVER, "--port", str(PORT), *SERVER_OPTIONS, *options],
         stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE if capture_stderr else None,
+        text=True,
         preexec_fn=limit_fds,
     )
     deadline = time.time() + 5
@@ -151,9 +153,14 @@ def start_server(*options, fd_limit=None):
 class ServerTestCase(unittest.TestCase):
     OPTIONS = ("--workers", "4")
     FD_LIMIT = None
+    CAPTURE_STDERR = False
 
     def setUp(self):
-        self.proc = start_server(*self.OPTIONS, fd_limit=self.FD_LIMIT)
+        self.proc = start_server(
+            *self.OPTIONS,
+            fd_limit=self.FD_LIMIT,
+            capture_stderr=self.CAPTURE_STDERR,
+        )
 
     def tearDown(self):
         if self.proc.poll() is None:
@@ -346,7 +353,9 @@ class ServerTest(ServerTestCase):
 
     def test_unknown_type_returns_error_and_connection_survives(self):
         s = connect()
-        for i, msg_type in enumerate([0, STATS, 9, 0x7F, ECHO | RESPONSE, ERROR]):
+        for i, msg_type in enumerate(
+            [0, 9, 0x7F, ECHO | RESPONSE, STATS | RESPONSE, ERROR]
+        ):
             reply = protocol.request(s, msg_type, i, b"whatever")
             self.assert_error(reply, protocol.ERR_UNKNOWN_TYPE, i)
         self.assert_echo(s, b"still open")
@@ -1065,6 +1074,195 @@ class SecondSignalTest(ServerTestCase):
         self.assertEqual(self.proc.wait(timeout=5), -signal.SIGINT)
         self.assertLess(time.time() - start, 1)
         s.close()
+
+
+class StatsTest(ServerTestCase):
+    OPTIONS = ("--workers", "3", "--queue-capacity", "32")
+
+    def stats(self, s, request_id=1):
+        return protocol.parse_stats(protocol.request(s, STATS, request_id))
+
+    def test_reports_the_configuration(self):
+        s = connect()
+        stats = self.stats(s)
+
+        self.assertEqual(stats["workers"], 3)
+        self.assertEqual(stats["queue_capacity"], 32)
+        self.assertEqual(stats["connections"], 1)
+        self.assertEqual(stats["queue_depth"], 0)
+        self.assertEqual(stats["tasks_rejected"], 0)
+        self.assertEqual(stats["tasks_failed"], 0)
+        self.assertGreater(stats["uptime_us"], 0)
+        s.close()
+
+    def test_counts_connections(self):
+        s = connect()
+        others = [connect() for _ in range(9)]
+        for other in others:
+            self.assert_echo(other, b"here")
+
+        self.assertEqual(self.stats(s)["connections"], 10)
+
+        for other in others:
+            other.close()
+
+        # The server notices each close on its own time.
+        deadline = time.time() + 5
+        while self.stats(s)["connections"] != 1:
+            self.assertLess(time.time(), deadline)
+            time.sleep(0.02)
+        s.close()
+
+    def test_counts_only_requests_that_went_to_a_worker(self):
+        s = connect()
+        before = self.stats(s)
+
+        for i in range(20):
+            self.assert_echo(s, b"work", request_id=i)
+        for i in range(5):
+            self.assertEqual(protocol.request(s, PING, i), (PING | RESPONSE, i, b""))
+        self.assertEqual(protocol.request(s, 9, 1)[0], ERROR)
+
+        after = self.stats(s)
+
+        # PING, STATS and the rejected request never reach the pool.
+        self.assertEqual(after["tasks_submitted"] - before["tasks_submitted"], 20)
+        self.assertEqual(after["tasks_completed"] - before["tasks_completed"], 20)
+        self.assertEqual(after["tasks_failed"], 0)
+        self.assertGreater(after["uptime_us"], before["uptime_us"])
+        s.close()
+
+    def test_measures_the_time_workers_are_busy(self):
+        busy = self.compute_lasting(0.3)
+        s = connect()
+        s.settimeout(30)
+        before = self.stats(s)
+
+        s.sendall(busy)
+        self.assertEqual(protocol.recv_frame(s)[0], COMPUTE | RESPONSE)
+
+        grown = self.stats(s)["worker_busy_us"] - before["worker_busy_us"]
+        self.assertGreater(grown, 250000)
+        s.close()
+
+    def test_keeps_its_place_in_the_pipeline(self):
+        s = connect()
+        s.sendall(
+            protocol.encode(ECHO, 1, b"first")
+            + protocol.encode(STATS, 2)
+            + protocol.encode(PING, 3)
+        )
+        self.assertEqual(protocol.recv_frame(s), (ECHO | RESPONSE, 1, b"first"))
+
+        frame = protocol.recv_frame(s)
+        self.assertEqual(frame[:2], (STATS | RESPONSE, 2))
+        # The ECHO before it has been through a worker by now.
+        self.assertGreaterEqual(protocol.parse_stats(frame)["tasks_completed"], 1)
+
+        self.assertEqual(protocol.recv_frame(s), (PING | RESPONSE, 3, b""))
+        s.close()
+
+
+class OverloadTest(ServerTestCase):
+    # One worker and room for two waiting requests.
+    OPTIONS = ("--workers", "1", "--queue-capacity", "2")
+
+    def test_full_queue_answers_server_busy_and_keeps_the_connection(self):
+        busy = self.compute_lasting(1.5)
+
+        # The only worker takes this.
+        working = connect()
+        working.settimeout(60)
+        working.sendall(busy)
+        time.sleep(0.2)
+
+        # These two fill the queue.
+        queued = [connect() for _ in range(2)]
+        for i, s in enumerate(queued):
+            s.settimeout(60)
+            s.sendall(protocol.encode(ECHO, 10 + i, b"waiting"))
+        time.sleep(0.2)
+
+        # No room for this one. It must be told so at once, not made to
+        # wait and not disconnected.
+        late = connect()
+        start = time.time()
+        reply = protocol.request(late, ECHO, 7, b"no room")
+        self.assertLess(time.time() - start, 0.5)
+        self.assert_error(reply, protocol.ERR_SERVER_BUSY, 7)
+
+        # Requests that need no worker are still served on it.
+        self.assertEqual(protocol.request(late, PING, 8), (PING | RESPONSE, 8, b""))
+
+        stats = protocol.parse_stats(protocol.request(late, STATS, 9))
+        self.assertEqual(stats["queue_depth"], 2)
+        self.assertEqual(stats["queue_capacity"], 2)
+        self.assertEqual(stats["tasks_rejected"], 1)
+        self.assertEqual(stats["connections"], 4)
+
+        # Each of three pipelined requests gets its own answer, in order.
+        late.sendall(b"".join(protocol.encode(ECHO, i, b"x") for i in (21, 22, 23)))
+        for i in (21, 22, 23):
+            self.assert_error(
+                protocol.recv_frame(late), protocol.ERR_SERVER_BUSY, i
+            )
+
+        # Nothing that was accepted is lost.
+        self.assertEqual(protocol.recv_frame(working)[0], COMPUTE | RESPONSE)
+        for i, s in enumerate(queued):
+            self.assertEqual(
+                protocol.recv_frame(s), (ECHO | RESPONSE, 10 + i, b"waiting")
+            )
+
+        # With the worker free again the same connection is served.
+        self.assert_echo(late, b"room now", request_id=30)
+
+        stats = protocol.parse_stats(protocol.request(late, STATS, 31))
+        self.assertEqual(stats["queue_depth"], 0)
+        self.assertEqual(stats["tasks_rejected"], 4)
+
+        for s in [working, late, *queued]:
+            s.close()
+
+
+class StatsLogTest(ServerTestCase):
+    OPTIONS = ("--workers", "2", "--stats-interval-ms", "200")
+    CAPTURE_STDERR = True
+
+    def test_logs_the_counters_at_the_interval(self):
+        s = connect()
+        for i in range(5):
+            self.assert_echo(s, b"counted", request_id=i)
+        time.sleep(1.2)
+        s.close()
+
+        self.proc.send_signal(signal.SIGINT)
+        _, stderr = self.proc.communicate(timeout=10)
+        lines = [line for line in stderr.splitlines() if line.startswith("stats:")]
+
+        # Six intervals fit in 1.2 s. Allow for a slow machine.
+        self.assertGreaterEqual(len(lines), 4)
+        self.assertLessEqual(len(lines), 9)
+        self.assertRegex(
+            lines[-1],
+            r"^stats: connections=\d+ queue=0/1024 submitted=5 rejected=0 "
+            r"completed=5 failed=0 busy_ms=\d+$",
+        )
+
+
+class NoStatsLogTest(ServerTestCase):
+    CAPTURE_STDERR = True
+
+    def test_logs_nothing_unless_asked(self):
+        s = connect()
+        self.assert_echo(s, b"quiet")
+        time.sleep(0.5)
+        s.close()
+
+        self.proc.send_signal(signal.SIGINT)
+        _, stderr = self.proc.communicate(timeout=10)
+
+        self.assertNotIn("stats:", stderr)
 
 
 class LargeFrameTest(ServerTestCase):

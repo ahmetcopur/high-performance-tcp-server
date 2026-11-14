@@ -100,6 +100,29 @@ DecodeResult decodeFrame(std::string_view data, std::uint32_t maxLength);
 // can go on either way, since the frame boundary is known.
 bool validateRequest(const Frame& frame, ErrorCode& error);
 
+// What STATS reports. On the wire it is these ten 64-bit integers in
+// this order, big-endian, 80 bytes. Fields may be added at the end, so
+// a client must accept a longer payload.
+struct ServerStats {
+    std::uint64_t connections = 0;    // open right now
+    std::uint64_t queueDepth = 0;     // requests waiting for a worker
+    std::uint64_t queueCapacity = 0;  // how many may wait
+    std::uint64_t workers = 0;        // worker threads
+    std::uint64_t tasksSubmitted = 0; // requests handed to workers
+    std::uint64_t tasksRejected = 0;  // refused because the queue was full
+    std::uint64_t tasksCompleted = 0; // finished by workers
+    std::uint64_t tasksFailed = 0;    // of those, the ones that threw
+    std::uint64_t workerBusyMicroseconds = 0; // summed over all workers
+    std::uint64_t uptimeMicroseconds = 0;     // since the server started
+};
+
+constexpr std::size_t STATS_SIZE = 80;
+
+std::string encodeStats(const ServerStats& stats);
+
+// Returns false if the payload is shorter than STATS_SIZE.
+bool decodeStats(std::string_view payload, ServerStats& stats);
+
 // The work behind COMPUTE: 64-bit FNV-1a over data, passing over it
 // `iterations` times without resetting the hash in between.
 //

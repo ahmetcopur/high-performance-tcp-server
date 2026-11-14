@@ -175,3 +175,23 @@ TEST(Config, RejectsUnknownPollersAndAMissingValue) {
 TEST(Config, SummaryListsThePoller) {
     EXPECT_NE(optionSummary().find("--poller poll|epoll"), std::string::npos);
 }
+
+TEST(Config, QueueCapacityAndStatsInterval) {
+    Config config;
+    std::string error;
+
+    EXPECT_EQ(config.queueCapacity, 1024);
+    EXPECT_EQ(config.statsIntervalMs, 0);
+
+    ASSERT_TRUE(parse({"--queue-capacity", "16", "--stats-interval-ms", "250"},
+                      config, error));
+
+    EXPECT_EQ(config.queueCapacity, 16);
+    EXPECT_EQ(config.statsIntervalMs, 250);
+
+    // Zero turns the log line off and is allowed. A queue needs room for
+    // at least one request.
+    EXPECT_TRUE(parse({"--stats-interval-ms", "0"}, config, error));
+    EXPECT_TRUE(fails({"--queue-capacity", "0"}));
+    EXPECT_TRUE(fails({"--stats-interval-ms", "-1"}));
+}

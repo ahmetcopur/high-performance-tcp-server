@@ -192,12 +192,6 @@ void Connection::finishWork(std::string_view encoded) {
     respond(encoded);
 }
 
-void Connection::stopServing() {
-    working = false;
-    input.clear();
-    currentState = State::Closing;
-}
-
 void Connection::drain() {
     input.clear();
 

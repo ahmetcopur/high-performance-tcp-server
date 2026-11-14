@@ -21,11 +21,9 @@ struct Completion {
     int fd;
     std::uint64_t id;
 
-    // The encoded response.
+    // The encoded response. Empty only if the worker could not produce
+    // even an error, in which case the connection is closed.
     std::string response;
-
-    // The request threw an exception instead of producing a response.
-    bool failed;
 };
 
 // The loop every socket is served from. It owns the poller, the waker

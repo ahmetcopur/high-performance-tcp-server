@@ -1,6 +1,7 @@
 #include "TcpServer.h"
 
 #include "Protocol.h"
+#include "RequestHandler.h"
 
 #include <cerrno>
 #include <chrono>
@@ -20,38 +21,6 @@ namespace {
 
 constexpr int ACCEPT_RETRY_MS = 100;
 
-// Runs inside a worker thread. Handles ECHO and COMPUTE, the only types
-// the event loop hands over, and returns the encoded response.
-std::string processRequest(protocol::Frame request,
-                           const std::atomic<bool>& stopWork) {
-    using namespace protocol;
-
-    Frame response;
-    response.type = static_cast<std::uint8_t>(request.type | RESPONSE_BIT);
-    response.requestId = request.requestId;
-
-    if (request.type == TYPE_ECHO) {
-        response.payload = std::move(request.payload);
-        return encodeFrame(response);
-    }
-
-    if (request.payload.size() < 4)
-        return encodeError(request.requestId, ErrorCode::BadRequest,
-                           "compute payload shorter than 4 bytes");
-
-    std::uint32_t iterations = readU32(request.payload.data());
-
-    if (iterations > MAX_COMPUTE_ITERATIONS)
-        return encodeError(request.requestId, ErrorCode::BadRequest,
-                           "iteration count above the limit");
-
-    std::string_view data(request.payload.data() + 4,
-                          request.payload.size() - 4);
-
-    appendU64(response.payload, computeHash(data, iterations, &stopWork));
-    return encodeFrame(response);
-}
-
 [[noreturn]] void fail(const char* what) {
     throw std::system_error(errno, std::generic_category(), what);
 }
@@ -60,7 +29,9 @@ std::string processRequest(protocol::Frame request,
 
 TcpServer::TcpServer(const Config& serverConfig)
     : config(serverConfig), limits(config), loop(config.poller),
-      pool(static_cast<std::size_t>(config.workers)) {
+      pool(static_cast<std::size_t>(config.workers),
+           static_cast<std::size_t>(config.queueCapacity)),
+      startedAt(Clock::now()), nextStatsLog(startedAt) {
     listener.reset(socket(AF_INET, SOCK_STREAM, 0));
 
     if (!listener.valid())
@@ -201,7 +172,9 @@ void TcpServer::onCompletion(Completion& completion, Clock::time_point now) {
     if (it == connections.end() || it->second.id() != completion.id)
         return;
 
-    if (completion.failed) {
+    // The worker could not produce even an error. There is nothing to
+    // send, and the client must not be left waiting.
+    if (completion.response.empty()) {
         closeConnection(it);
         return;
     }
@@ -242,6 +215,24 @@ int TcpServer::onTimers(Clock::time_point now) {
     }
 
     long long timeoutMs = timers.msUntilNext(now);
+
+    if (config.statsIntervalMs > 0) {
+        auto interval = std::chrono::milliseconds(config.statsIntervalMs);
+
+        if (now >= nextStatsLog) {
+            logStats(now);
+            nextStatsLog = now + interval;
+        }
+
+        long long untilNextMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(nextStatsLog -
+                                                                  now)
+                .count() +
+            1;
+
+        if (timeoutMs < 0 || untilNextMs < timeoutMs)
+            timeoutMs = untilNextMs;
+    }
 
     if (acceptBackoff && (timeoutMs < 0 || ACCEPT_RETRY_MS < timeoutMs))
         timeoutMs = ACCEPT_RETRY_MS;
@@ -415,28 +406,49 @@ void TcpServer::advance(Connection& connection, Clock::time_point now) {
             continue;
         }
 
-        connection.startWork();
+        // Answered here too. It reports on the workers, so it must not
+        // have to wait for one.
+        if (request.type == TYPE_STATS) {
+            Frame response;
+            response.type = TYPE_STATS | RESPONSE_BIT;
+            response.requestId = request.requestId;
+            response.payload = encodeStats(currentStats(now));
 
-        try {
-            pool.enqueue([this, fd, id = connection.id(),
-                          request = std::move(request)]() mutable {
-                Completion completion{fd, id, "", false};
+            connection.respond(encodeFrame(response));
+            continue;
+        }
 
-                // An exception must still produce a completion, or the
-                // connection would wait for its worker forever.
+        std::uint32_t requestId = request.requestId;
+
+        bool accepted =
+            pool.trySubmit([this, fd, id = connection.id(),
+                            request = std::move(request)]() mutable {
+                Completion completion{fd, id, ""};
+                std::uint32_t failedId = request.requestId;
+
+                // Something goes back to the loop whatever happens here, or
+                // the connection would wait for its worker forever. If even
+                // the error cannot be built, the response stays empty.
                 try {
                     completion.response =
-                        processRequest(std::move(request), stopWork);
+                        answerOrInternalError(failedId, [&]() {
+                            return processRequest(std::move(request), stopWork);
+                        });
                 } catch (...) {
-                    completion.failed = true;
                 }
 
                 loop.post(std::move(completion));
             });
-        } catch (const std::exception& e) {
-            std::cerr << "Task error: " << e.what() << '\n';
-            connection.stopServing();
+
+        if (accepted) {
+            connection.startWork();
+            continue;
         }
+
+        // The queue is full. Say so and carry on: the connection stays
+        // open, and its next request may find room.
+        connection.respond(encodeError(requestId, ErrorCode::ServerBusy,
+                                       errorName(ErrorCode::ServerBusy)));
     }
 
     // In Closing, once the last response has gone out: send FIN and keep
@@ -451,4 +463,36 @@ void TcpServer::advance(Connection& connection, Clock::time_point now) {
     }
 
     settle(connection, now);
+}
+
+protocol::ServerStats TcpServer::currentStats(Clock::time_point now) const {
+    ThreadPool::Stats work = pool.stats();
+    protocol::ServerStats stats;
+
+    stats.connections = connections.size();
+    stats.queueDepth = work.queueDepth;
+    stats.queueCapacity = work.capacity;
+    stats.workers = work.workers;
+    stats.tasksSubmitted = work.submitted;
+    stats.tasksRejected = work.rejected;
+    stats.tasksCompleted = work.completed;
+    stats.tasksFailed = work.failed;
+    stats.workerBusyMicroseconds = work.busyMicroseconds;
+    stats.uptimeMicroseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(now - startedAt)
+            .count());
+
+    return stats;
+}
+
+void TcpServer::logStats(Clock::time_point now) const {
+    protocol::ServerStats stats = currentStats(now);
+
+    std::cerr << "stats: connections=" << stats.connections
+              << " queue=" << stats.queueDepth << '/' << stats.queueCapacity
+              << " submitted=" << stats.tasksSubmitted
+              << " rejected=" << stats.tasksRejected
+              << " completed=" << stats.tasksCompleted
+              << " failed=" << stats.tasksFailed
+              << " busy_ms=" << stats.workerBusyMicroseconds / 1000 << '\n';
 }

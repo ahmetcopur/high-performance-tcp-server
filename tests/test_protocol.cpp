@@ -279,6 +279,7 @@ TEST(Validate, AcceptsTheRequestTypes) {
     EXPECT_TRUE(validates(makeFrame(TYPE_PING, 1, "")));
     EXPECT_TRUE(validates(makeFrame(TYPE_ECHO, 1, "x")));
     EXPECT_TRUE(validates(makeFrame(TYPE_COMPUTE, 1, "x")));
+    EXPECT_TRUE(validates(makeFrame(TYPE_STATS, 1, "")));
 }
 
 TEST(Validate, RejectsOtherVersions) {
@@ -297,10 +298,9 @@ TEST(Validate, RejectsNonzeroReserved) {
     EXPECT_EQ(rejection(frame), ErrorCode::MalformedFrame);
 }
 
-// STATS is reserved in the protocol but not implemented yet. Response
-// and error types are not requests.
+// Response and error types are not requests.
 TEST(Validate, RejectsTypesThatAreNotRequests) {
-    for (int type : {0, 4, 5, 0x7f, 0x81, 0x82, 0xff})
+    for (int type : {0, 5, 0x7f, 0x81, 0x82, 0x84, 0xff})
         EXPECT_EQ(rejection(makeFrame(static_cast<std::uint8_t>(type), 1, "")),
                   ErrorCode::UnknownType)
             << "type " << type;
@@ -351,4 +351,106 @@ TEST(ComputeHash, StopsAtOnceWhenCancelled) {
     std::string data(1 << 20, 'x');
 
     computeHash(data, MAX_COMPUTE_ITERATIONS, &cancelled);
+}
+
+TEST(Stats, AreTenBigEndianIntegersInTheDocumentedOrder) {
+    ServerStats stats;
+    stats.connections = 1;
+    stats.queueDepth = 2;
+    stats.queueCapacity = 3;
+    stats.workers = 4;
+    stats.tasksSubmitted = 5;
+    stats.tasksRejected = 6;
+    stats.tasksCompleted = 7;
+    stats.tasksFailed = 8;
+    stats.workerBusyMicroseconds = 9;
+    stats.uptimeMicroseconds = 0x0102030405060708ull;
+
+    std::string payload = encodeStats(stats);
+
+    ASSERT_EQ(payload.size(), STATS_SIZE);
+
+    for (std::uint64_t field = 0; field < 9; ++field)
+        EXPECT_EQ(readU64(payload.data() + field * 8), field + 1);
+
+    EXPECT_EQ(payload.substr(72),
+              std::string("\x01\x02\x03\x04\x05\x06\x07\x08", 8));
+}
+
+TEST(Stats, RoundTrip) {
+    ServerStats stats;
+    stats.connections = 12;
+    stats.queueDepth = 34;
+    stats.queueCapacity = 1024;
+    stats.workers = 8;
+    stats.tasksSubmitted = 0xffffffffffffffffull;
+    stats.tasksRejected = 56;
+    stats.tasksCompleted = 78;
+    stats.tasksFailed = 9;
+    stats.workerBusyMicroseconds = 123456789;
+    stats.uptimeMicroseconds = 987654321;
+
+    ServerStats back;
+    ASSERT_TRUE(decodeStats(encodeStats(stats), back));
+
+    EXPECT_EQ(back.connections, 12u);
+    EXPECT_EQ(back.queueDepth, 34u);
+    EXPECT_EQ(back.queueCapacity, 1024u);
+    EXPECT_EQ(back.workers, 8u);
+    EXPECT_EQ(back.tasksSubmitted, 0xffffffffffffffffull);
+    EXPECT_EQ(back.tasksRejected, 56u);
+    EXPECT_EQ(back.tasksCompleted, 78u);
+    EXPECT_EQ(back.tasksFailed, 9u);
+    EXPECT_EQ(back.workerBusyMicroseconds, 123456789u);
+    EXPECT_EQ(back.uptimeMicroseconds, 987654321u);
+}
+
+// Fields may be added at the end later.
+TEST(Stats, DecodeAcceptsALongerPayloadAndRefusesAShorterOne) {
+    ServerStats stats;
+    stats.workers = 4;
+    std::string payload = encodeStats(stats);
+
+    ServerStats back;
+    EXPECT_TRUE(decodeStats(payload + "extra", back));
+    EXPECT_EQ(back.workers, 4u);
+
+    EXPECT_FALSE(decodeStats(payload.substr(0, STATS_SIZE - 1), back));
+    EXPECT_FALSE(decodeStats("", back));
+}
+
+// The STATS and ERROR 5 examples in docs/protocol.md.
+TEST(Stats, MatchTheDocumentedExample) {
+    ServerStats stats;
+    stats.connections = 3;
+    stats.queueCapacity = 1024;
+    stats.workers = 8;
+    stats.tasksSubmitted = 120;
+    stats.tasksCompleted = 120;
+    stats.workerBusyMicroseconds = 45000;
+    stats.uptimeMicroseconds = 60000000;
+
+    Frame response =
+        makeFrame(TYPE_STATS | RESPONSE_BIT, 5, encodeStats(stats));
+    std::string bytes = encodeFrame(response);
+
+    EXPECT_EQ(
+        bytes.substr(0, 12),
+        std::string("\x00\x00\x00\x58\x01\x84\x00\x00\x00\x00\x00\x05", 12));
+    EXPECT_EQ(bytes.substr(12 + 16, 8),
+              std::string("\x00\x00\x00\x00\x00\x00\x04\x00", 8));
+    EXPECT_EQ(bytes.substr(12 + 64, 8),
+              std::string("\x00\x00\x00\x00\x00\x00\xaf\xc8", 8));
+    EXPECT_EQ(bytes.substr(12 + 72, 8),
+              std::string("\x00\x00\x00\x00\x03\x93\x87\x00", 8));
+}
+
+TEST(Encode, ServerBusyMatchesTheDocumentedExample) {
+    std::string bytes =
+        encodeError(7, ErrorCode::ServerBusy, errorName(ErrorCode::ServerBusy));
+
+    EXPECT_EQ(bytes, std::string("\x00\x00\x00\x15\x01\xff\x00\x00"
+                                 "\x00\x00\x00\x07\x00\x05"
+                                 "server busy",
+                                 25));
 }

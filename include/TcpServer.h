@@ -4,6 +4,7 @@
 #include "Connection.h"
 #include "EventLoop.h"
 #include "FileDescriptor.h"
+#include "Protocol.h"
 #include "ThreadPool.h"
 #include "TimerQueue.h"
 
@@ -56,6 +57,11 @@ private:
     bool draining = false;
     Clock::time_point drainDeadline;
 
+    Clock::time_point startedAt;
+
+    // When the next line of counters is due, if they are logged at all.
+    Clock::time_point nextStatsLog;
+
     Clock::time_point lastAcceptLog;
     Clock::time_point lastConnectionLog;
     Clock::time_point lastTimeoutLog;
@@ -81,6 +87,10 @@ private:
 
     void closeConnection(int fd);
     ConnectionMap::iterator closeConnection(ConnectionMap::iterator it);
+
+    // What STATS reports and the periodic log line prints.
+    protocol::ServerStats currentStats(Clock::time_point now) const;
+    void logStats(Clock::time_point now) const;
 
     // A flood of failures must not become a flood of log lines. Each
     // source writes at most one line per second.

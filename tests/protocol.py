@@ -103,3 +103,30 @@ def error_code(frame):
     if msg_type != ERROR or len(payload) < 2:
         raise ValueError(f"not an ERROR frame: {frame!r}")
     return struct.unpack(">H", payload[:2])[0]
+
+
+# The fields of a STATS response, in wire order. Each is a 64-bit
+# big-endian integer.
+STATS_FIELDS = (
+    "connections",
+    "queue_depth",
+    "queue_capacity",
+    "workers",
+    "tasks_submitted",
+    "tasks_rejected",
+    "tasks_completed",
+    "tasks_failed",
+    "worker_busy_us",
+    "uptime_us",
+)
+
+
+def parse_stats(frame):
+    # The counters in a STATS response returned by recv_frame(), by name.
+    # A longer payload is accepted, since fields may be added at the end.
+    msg_type, _, payload = frame
+    size = 8 * len(STATS_FIELDS)
+    if msg_type != (STATS | RESPONSE) or len(payload) < size:
+        raise ValueError(f"not a STATS response: {frame!r}")
+    values = struct.unpack(f">{len(STATS_FIELDS)}Q", payload[:size])
+    return dict(zip(STATS_FIELDS, values))

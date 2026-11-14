@@ -59,7 +59,9 @@ add_library(tcpserver STATIC
     src/FileDescriptor.cpp
     src/PollPoller.cpp
     src/Protocol.cpp
+    src/RequestHandler.cpp
     src/TcpServer.cpp
+    src/ThreadPool.cpp
     src/TimerQueue.cpp
     src/Waker.cpp)
 # epoll exists only on Linux.
@@ -93,6 +95,7 @@ if(BUILD_TESTING)
             test_file_descriptor
             test_poller
             test_protocol
+            test_request_handler
             test_threadpool
             test_timer_queue
             test_waker)

@@ -39,6 +39,8 @@ const Option OPTIONS[] = {
     {"--write-stall-timeout-ms", &Config::writeStallTimeoutMs, 1, INT_MAX},
     {"--linger-timeout-ms", &Config::lingerTimeoutMs, 1, INT_MAX},
     {"--shutdown-timeout-ms", &Config::shutdownTimeoutMs, 1, INT_MAX},
+    {"--queue-capacity", &Config::queueCapacity, 1, INT_MAX},
+    {"--stats-interval-ms", &Config::statsIntervalMs, 0, INT_MAX},
 };
 
 bool parsePoller(const std::string& value, PollerKind& poller,

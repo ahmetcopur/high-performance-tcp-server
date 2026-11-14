@@ -149,10 +149,6 @@ public:
     // The worker is done. Queues its encoded response.
     void finishWork(std::string_view encoded);
 
-    // Ends the conversation without a framing error: nothing more is
-    // decoded, and the connection closes after what is already queued.
-    void stopServing();
-
     // A shutdown has begun. Requests not yet started are dropped, and a
     // connection that was Open ends through Closing.
     void drain();

@@ -142,10 +142,48 @@ bool validateRequest(const Frame& frame, ErrorCode& error) {
     }
 
     if (frame.type != TYPE_PING && frame.type != TYPE_ECHO &&
-        frame.type != TYPE_COMPUTE) {
+        frame.type != TYPE_COMPUTE && frame.type != TYPE_STATS) {
         error = ErrorCode::UnknownType;
         return false;
     }
+
+    return true;
+}
+
+std::string encodeStats(const ServerStats& stats) {
+    std::string payload;
+    payload.reserve(STATS_SIZE);
+
+    appendU64(payload, stats.connections);
+    appendU64(payload, stats.queueDepth);
+    appendU64(payload, stats.queueCapacity);
+    appendU64(payload, stats.workers);
+    appendU64(payload, stats.tasksSubmitted);
+    appendU64(payload, stats.tasksRejected);
+    appendU64(payload, stats.tasksCompleted);
+    appendU64(payload, stats.tasksFailed);
+    appendU64(payload, stats.workerBusyMicroseconds);
+    appendU64(payload, stats.uptimeMicroseconds);
+
+    return payload;
+}
+
+bool decodeStats(std::string_view payload, ServerStats& stats) {
+    if (payload.size() < STATS_SIZE)
+        return false;
+
+    const char* bytes = payload.data();
+
+    stats.connections = readU64(bytes);
+    stats.queueDepth = readU64(bytes + 8);
+    stats.queueCapacity = readU64(bytes + 16);
+    stats.workers = readU64(bytes + 24);
+    stats.tasksSubmitted = readU64(bytes + 32);
+    stats.tasksRejected = readU64(bytes + 40);
+    stats.tasksCompleted = readU64(bytes + 48);
+    stats.tasksFailed = readU64(bytes + 56);
+    stats.workerBusyMicroseconds = readU64(bytes + 64);
+    stats.uptimeMicroseconds = readU64(bytes + 72);
 
     return true;
 }
