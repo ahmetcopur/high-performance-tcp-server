@@ -12,7 +12,7 @@ comparable.
 - [x] 3. Binary protocol and per-connection buffering
 - [x] 4. Connection lifecycle, half-close, and timeouts
 - [x] 5. Graceful shutdown policy
-- [ ] 6. Refactor into modules
+- [x] 6. Refactor into modules
 - [ ] 7. Linux epoll backend
 - [ ] 8. Thread pool engineering
 - [ ] 9. Rebuild the benchmark suite
@@ -386,6 +386,73 @@ Not verified:
 - The default deadline of 5 s. The deadline tests use 1 s.
 - An exception escaping the event loop. Nothing provokes one.
 
+## Step 6: refactor into modules (2026-11-14)
+
+What changed: `main.cpp` went from about 800 lines to 64. The server now
+consists of `TcpServer`, `EventLoop`, `Poller` with `PollPoller`,
+`Connection` and `FileDescriptor`, next to the `Protocol`, `Buffer`,
+`Config` and `ThreadPool` that already existed. What each is responsible
+for, and the ownership rules, are in [architecture.md](architecture.md).
+No behaviour is meant to have changed.
+
+How it was done: each new module was added with its own unit tests
+while `main.cpp` still ran its old code (three commits), and then the
+server was switched over in one commit. Every commit builds and passes
+its tests.
+
+Decisions:
+
+- **`EventLoop` runs the loop and calls a handler.** It has four
+  callbacks: shutdown requested, request finished, timers, descriptor
+  ready. `TcpServer` implements them. The loop knows nothing about
+  connections or the protocol.
+- **Timers stay a linear scan**, done by `TcpServer` in the timers
+  callback. `EventLoop` only turns the answer into the sleep time. The
+  heap or timer wheel is still due in step 7.
+- **A connection's interest is updated in that same scan**, once per
+  iteration, by calling `Poller::modify()`. The pollfd array itself is
+  no longer rebuilt.
+- **A connection is now looked at only when it has an event or a
+  completion.** The old loop ran the serve, FIN and finished checks on
+  every connection in every iteration. The order of work within an
+  iteration is otherwise unchanged.
+- **Startup failures are exceptions.** The constructors of `EventLoop`
+  and `TcpServer` throw `std::system_error`, and `main` prints it and
+  returns 1. The messages name the call that failed, for example
+  "bind: Address already in use".
+- **`EpollPoller.h` from the target structure does not exist yet.** It
+  belongs to step 7.
+
+New unit tests: `FileDescriptor` 7, `PollPoller` 10, `Connection` 26.
+The `Connection` tests put one on a socket pair and play the client.
+They settle three things earlier steps listed as not verified:
+throttling starts exactly at the high watermark, a partial frame is
+timed from its first byte, and sending output restarts the stall clock
+while a full socket does not.
+
+Verified in CI, GitHub Actions run 43531757713 on commit `98a8cd9`: all
+six jobs pass on the first run, each with 90 of 90 tests and no
+warnings. The 90 are 89 GoogleTest cases and the integration suite of
+54 tests. This run is the only verification of the refactored server
+under ASan, UBSan and TSan, and the only one on Linux.
+
+Verified on the Mac, Release build, Apple clang 17: `ctest` passed 90 of
+90 each time a run completed without the machine sleeping, three times
+in all. Runs interrupted by sleep are not counted either way (open
+issue 20). The sanitizer builds and the Linux container were not run
+locally for this step.
+
+Only `FileDescriptor.cpp` calls `close()`, checked with grep.
+
+Not verified:
+
+- That behaviour is unchanged in every respect. The evidence is that
+  the same 54 integration tests pass. They were not changed in this
+  step.
+- The exact low watermark. The test shows a connection stays throttled
+  until its output has drained, not the byte at which it resumes.
+- Any performance effect of the refactor. Nothing was measured.
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -445,3 +512,8 @@ Not verified:
     were never run.
 19. **An exception escaping the event loop ends the process through
     `std::terminate`.** No connection is closed in an orderly way.
+20. **Local test runs fail when the Mac sleeps.** Several tests measure
+    wall-clock time. If the machine sleeps in the middle of one, the
+    test fails or stalls, and connections held open are closed by the
+    idle limit because the monotonic clock on macOS keeps counting
+    during sleep. Seen on 2026-11-14 with the lid closed overnight.

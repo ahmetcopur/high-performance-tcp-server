@@ -107,12 +107,19 @@ another clang by adding, for example,
 ## Layout
 
 ```text
-include/       Buffer.h, Config.h, Protocol.h, ThreadPool.h
-src/           main.cpp, Buffer.cpp, Config.cpp, Protocol.cpp
-tests/         test_buffer.cpp, test_config.cpp, test_protocol.cpp,
-               test_threadpool.cpp (GoogleTest)
+include/       TcpServer.h, EventLoop.h, Poller.h, PollPoller.h,
+               Connection.h, Buffer.h, FileDescriptor.h, ThreadPool.h,
+               Protocol.h, Config.h
+src/           main.cpp and one .cpp per header (ThreadPool and Poller
+               are header-only)
+tests/         test_buffer.cpp, test_config.cpp, test_connection.cpp,
+               test_file_descriptor.cpp, test_poller.cpp,
+               test_protocol.cpp, test_threadpool.cpp (GoogleTest)
                test_server.py (black-box, starts the real server)
                protocol.py (Python client for the protocol)
 docs/          architecture.md, protocol.md, PROGRESS.md
 benchmark.py   quick load script, not a rigorous benchmark
 ```
+
+What each module is responsible for is listed at the top of
+[docs/architecture.md](docs/architecture.md).

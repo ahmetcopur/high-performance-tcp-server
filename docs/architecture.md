@@ -4,6 +4,56 @@ How the server is put together today. The wire format is in
 [protocol.md](protocol.md). What has been verified, and what is still
 open, is in [PROGRESS.md](PROGRESS.md).
 
+## Modules
+
+Each responsibility has one home.
+
+| Module | Responsibility |
+| --- | --- |
+| `main.cpp` | Parses the options, installs the signal handler, starts the server. Nothing else. |
+| `Config` | The options, their defaults and their allowed ranges. |
+| `TcpServer` | The listening socket, the accept logic, the map of connections, which request goes to a worker, and how a shutdown goes. |
+| `EventLoop` | The loop itself: the poller, the wakeup pipe, the completion queue, and when to sleep and for how long. |
+| `Poller`, `PollPoller` | Waiting for descriptors. `Poller` is the interface, `PollPoller` does it with `poll()`. |
+| `Connection` | One client: its socket, input and output buffers, state, and deadlines. |
+| `Protocol` | Encoding and decoding frames, validating requests, the COMPUTE hash. No sockets. |
+| `Buffer` | A byte queue with a read offset. |
+| `FileDescriptor` | Owns one descriptor and closes it. The only place that calls `close()`. |
+| `ThreadPool` | The worker threads and their task queue. |
+
+`EventLoop` knows nothing about connections or the protocol. It calls
+back into a `Handler`, which `TcpServer` implements, for the four things
+that can happen:
+
+1. A shutdown was requested.
+2. A worker finished a request.
+3. It is time to look at the deadlines, which happens once per
+   iteration just before the loop sleeps.
+4. A descriptor is ready.
+
+## Ownership
+
+Three rules, and the code is arranged so that breaking one takes
+effort.
+
+1. **The event loop thread owns every connection and every buffer.**
+   Connections live in a map inside `TcpServer`. Nothing outside the
+   loop thread has a pointer or a reference to one.
+2. **A worker receives a copy of the request and the id of its
+   connection, and nothing else.** The task given to the pool captures
+   the decoded frame by value, the descriptor number and the id. It
+   cannot reach a `Connection`, a socket, or a buffer.
+3. **A result comes back only through the completion queue.** The
+   worker calls `EventLoop::post()`, which is the single place where
+   the two sides meet, behind one mutex. The loop thread takes the
+   result out and looks the connection up again by descriptor and id.
+
+Descriptors have exactly one owner each. A `Connection` owns its
+socket, `TcpServer` owns the listening socket and the spare descriptor,
+`EventLoop` owns both ends of the wakeup pipe. Each is a
+`FileDescriptor`, so a descriptor is closed when its owner is destroyed
+and at no other time.
+
 ## Threads
 
 One thread, the event loop, owns every socket and every connection. It
@@ -165,8 +215,8 @@ about 200 KiB/s.
 
 The event loop finds the nearest deadline by looking at every connection
 once per iteration and passes it to `poll()` as its timeout. This is a
-linear scan, which adds nothing while the poll set is rebuilt every
-iteration anyway.
+linear scan, which adds nothing while `poll()` itself looks at every
+descriptor on every call.
 
 ## Shutdown
 
@@ -216,16 +266,19 @@ status is the signal, not 0.
 
 ### Order of destruction
 
-The steps at the end of `main` are written out in the order they must
-happen, and do not rely on the order in which variables are declared:
+The steps at the end of `TcpServer::run()` are written out in the order
+they must happen, and do not rely on the order in which members are
+declared:
 
 1. Connections are closed, then the listening socket and the spare
    descriptor.
 2. Workers are told to give up their work and are joined. Until this
    returns, a worker may still push to the completion queue and write to
    the wake pipe.
-3. Only then is the wake pipe closed. After the join this is the only
-   thread, so the queue and its mutex can be destroyed in any order.
+3. Only then can the loop go, and with it the wake pipe and the
+   completion queue. After the join this is the only thread, so what is
+   left can be destroyed in any order. The destructor of `TcpServer`
+   joins the workers too, for a server that was built and never run.
 
 An exception that escapes the event loop is not caught. The process
 ends through `std::terminate` without running any of this.
