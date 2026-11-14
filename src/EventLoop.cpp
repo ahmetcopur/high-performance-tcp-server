@@ -2,40 +2,12 @@
 
 #include "PollPoller.h"
 
-#include <cerrno>
 #include <cstdio>
-#include <system_error>
 #include <utility>
 #include <vector>
 
-#include <unistd.h>
-
 EventLoop::EventLoop() : watcher(std::make_unique<PollPoller>()) {
-    int ends[2];
-
-    if (pipe(ends) < 0)
-        throw std::system_error(errno, std::generic_category(), "pipe");
-
-    wakeRead.reset(ends[0]);
-    wakeWrite.reset(ends[1]);
-
-    // Non-blocking on both ends: a full pipe must not block the thread
-    // that wakes the loop, and emptying it must not block the loop.
-    if (!wakeRead.setNonBlocking() || !wakeWrite.setNonBlocking())
-        throw std::system_error(errno, std::generic_category(), "pipe");
-
-    watcher->add(wakeRead.get(), true, false);
-}
-
-// If the pipe is full the write fails with EAGAIN, which is fine because
-// a wakeup is already pending. errno is put back because this also runs
-// inside a signal handler, on top of whatever the thread was doing.
-void EventLoop::wake() {
-    int saved = errno;
-    char byte = 1;
-    ssize_t n = write(wakeWrite.get(), &byte, 1);
-    (void)n;
-    errno = saved;
+    watcher->add(waker.fd(), true, false);
 }
 
 void EventLoop::post(Completion completion) {
@@ -50,12 +22,12 @@ void EventLoop::post(Completion completion) {
 
     // A non-empty queue already has a wakeup on its way.
     if (wasEmpty)
-        wake();
+        waker.notify();
 }
 
 void EventLoop::requestShutdown() {
     shutdownRequested = 1;
-    wake();
+    waker.notify();
 }
 
 void EventLoop::run(Handler& handler) {
@@ -77,12 +49,14 @@ void EventLoop::run(Handler& handler) {
             std::swap(done, completions);
         }
 
+        Clock::time_point now = Clock::now();
+
         while (!done.empty()) {
-            handler.onCompletion(done.front());
+            handler.onCompletion(done.front(), now);
             done.pop();
         }
 
-        int timeoutMs = handler.onTimers(Clock::now());
+        int timeoutMs = handler.onTimers(now);
 
         if (stopped)
             break;
@@ -92,10 +66,10 @@ void EventLoop::run(Handler& handler) {
             break;
         }
 
-        Clock::time_point now = Clock::now();
+        now = Clock::now();
 
         for (const PollEvent& event : events) {
-            if (event.fd != wakeRead.get()) {
+            if (event.fd != waker.fd()) {
                 handler.onSocketEvent(event, now);
                 continue;
             }
@@ -104,10 +78,7 @@ void EventLoop::run(Handler& handler) {
             // again at the top of the loop. The other way round, a
             // completion could arrive after the look and have its
             // wakeup thrown away.
-            char drain[256];
-
-            while (read(wakeRead.get(), drain, sizeof(drain)) > 0) {
-            }
+            waker.drain();
         }
     }
 }

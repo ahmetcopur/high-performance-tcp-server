@@ -5,6 +5,7 @@
 #include "EventLoop.h"
 #include "FileDescriptor.h"
 #include "ThreadPool.h"
+#include "TimerQueue.h"
 
 #include <atomic>
 #include <cstddef>
@@ -42,6 +43,9 @@ private:
 
     std::unordered_map<int, Connection> connections;
 
+    // When each connection's current phase runs out.
+    TimerQueue timers;
+
     // Never reused, unlike descriptor numbers.
     std::uint64_t nextId = 1;
 
@@ -57,7 +61,7 @@ private:
     Clock::time_point lastTimeoutLog;
 
     void onShutdownRequested() override;
-    void onCompletion(Completion& completion) override;
+    void onCompletion(Completion& completion, Clock::time_point now) override;
     int onTimers(Clock::time_point now) override;
     void onSocketEvent(const PollEvent& event, Clock::time_point now) override;
 
@@ -65,9 +69,18 @@ private:
 
     // Serves what the connection has received, as far as it can go now,
     // then closes the connection if that was the last thing it needed.
-    void advance(Connection& connection);
+    // Call it after anything has happened to a connection.
+    void advance(Connection& connection, Clock::time_point now);
+
+    // Tells the poller what the connection is waiting for and the timer
+    // queue how long it may wait. Whenever a connection changes, this is
+    // what keeps the two in step with it.
+    void settle(Connection& connection, Clock::time_point now);
+
+    using ConnectionMap = std::unordered_map<int, Connection>;
 
     void closeConnection(int fd);
+    ConnectionMap::iterator closeConnection(ConnectionMap::iterator it);
 
     // A flood of failures must not become a flood of log lines. Each
     // source writes at most one line per second.

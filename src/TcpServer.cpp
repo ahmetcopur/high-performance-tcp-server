@@ -137,14 +137,38 @@ void TcpServer::logLimited(Clock::time_point& last, const char* source,
 }
 
 void TcpServer::closeConnection(int fd) {
-    loop.poller().remove(fd);
-    connections.erase(fd);
+    auto it = connections.find(fd);
+
+    if (it != connections.end())
+        closeConnection(it);
+}
+
+TcpServer::ConnectionMap::iterator
+TcpServer::closeConnection(ConnectionMap::iterator it) {
+    timers.cancel(it->second.id());
+    loop.poller().remove(it->first);
+
+    return connections.erase(it);
+}
+
+void TcpServer::settle(Connection& connection, Clock::time_point now) {
+    loop.poller().modify(connection.fd(), connection.wantsRead(),
+                         connection.wantsWrite());
+
+    long long leftMs = connection.timeLeftMs(now);
+
+    // A phase without a limit is not armed. An earlier entry may still
+    // come up, and is then found to have nothing to do.
+    if (leftMs >= 0)
+        timers.arm(connection.fd(), connection.id(),
+                   now + std::chrono::milliseconds(leftMs));
 }
 
 void TcpServer::onShutdownRequested() {
+    Clock::time_point now = Clock::now();
+
     draining = true;
-    drainDeadline =
-        Clock::now() + std::chrono::milliseconds(config.shutdownTimeoutMs);
+    drainDeadline = now + std::chrono::milliseconds(config.shutdownTimeoutMs);
 
     // No new connections from here on.
     loop.poller().remove(listener.get());
@@ -160,16 +184,16 @@ void TcpServer::onShutdownRequested() {
         connection.drain();
 
         if (connection.owesNothing()) {
-            loop.poller().remove(it->first);
-            it = connections.erase(it);
+            it = closeConnection(it);
             continue;
         }
 
+        settle(connection, now);
         ++it;
     }
 }
 
-void TcpServer::onCompletion(Completion& completion) {
+void TcpServer::onCompletion(Completion& completion, Clock::time_point now) {
     auto it = connections.find(completion.fd);
 
     // The connection is gone, or the descriptor now belongs to another.
@@ -177,12 +201,12 @@ void TcpServer::onCompletion(Completion& completion) {
         return;
 
     if (completion.failed) {
-        closeConnection(completion.fd);
+        closeConnection(it);
         return;
     }
 
     it->second.finishWork(completion.response);
-    advance(it->second);
+    advance(it->second, now);
 }
 
 int TcpServer::onTimers(Clock::time_point now) {
@@ -191,35 +215,35 @@ int TcpServer::onTimers(Clock::time_point now) {
         return -1;
     }
 
-    long long timeoutMs = acceptBackoff ? ACCEPT_RETRY_MS : -1;
+    // Connections whose time has come up. An entry only promises that
+    // the connection is due no later than this, so each one is asked
+    // again. If it is not due after all, it goes back in.
+    TimerQueue::Entry entry;
 
-    // Close connections that have stayed in one phase for too long, find
-    // the nearest deadline among the rest, and tell the poller what each
-    // is waiting for. The scan is linear, which costs nothing extra
-    // while poll() is linear too.
-    for (auto it = connections.begin(); it != connections.end();) {
+    while (timers.popDue(now, entry)) {
+        auto it = connections.find(entry.fd);
+
+        if (it == connections.end() || it->second.id() != entry.id)
+            continue;
+
         Connection& connection = it->second;
+        long long leftMs = connection.timeLeftMs(now);
 
-        long long remainingMs = connection.timeLeftMs(now);
-
-        if (remainingMs == 0) {
+        if (leftMs == 0) {
             logLimited(lastTimeoutLog, "timeout",
                        timeoutName(connection.phase()));
-
-            loop.poller().remove(it->first);
-            it = connections.erase(it);
-            continue;
+            closeConnection(it);
         }
-
-        // One more than the truncated remainder, so that the loop wakes
-        // after the deadline and not just before it.
-        if (remainingMs > 0 && (timeoutMs < 0 || remainingMs + 1 < timeoutMs))
-            timeoutMs = remainingMs + 1;
-
-        loop.poller().modify(it->first, connection.wantsRead(),
-                             connection.wantsWrite());
-        ++it;
+        else if (leftMs > 0) {
+            timers.arm(entry.fd, entry.id,
+                       now + std::chrono::milliseconds(leftMs));
+        }
     }
+
+    long long timeoutMs = timers.msUntilNext(now);
+
+    if (acceptBackoff && (timeoutMs < 0 || ACCEPT_RETRY_MS < timeoutMs))
+        timeoutMs = ACCEPT_RETRY_MS;
 
     if (draining) {
         long long remainingMs =
@@ -234,6 +258,8 @@ int TcpServer::onTimers(Clock::time_point now) {
             return -1;
         }
 
+        // One more than the truncated remainder, so that the loop wakes
+        // after the deadline and not just before it.
         if (timeoutMs < 0 || remainingMs + 1 < timeoutMs)
             timeoutMs = remainingMs + 1;
     }
@@ -305,7 +331,7 @@ void TcpServer::onSocketEvent(const PollEvent& event, Clock::time_point now) {
         return;
     }
 
-    advance(connection);
+    advance(connection, now);
 }
 
 void TcpServer::acceptConnections(Clock::time_point now) {
@@ -357,13 +383,16 @@ void TcpServer::acceptConnections(Clock::time_point now) {
         int fd = socket.get();
 
         loop.poller().add(fd, true, false);
-        connections.emplace(
+
+        auto added = connections.emplace(
             std::piecewise_construct, std::forward_as_tuple(fd),
             std::forward_as_tuple(nextId++, std::move(socket), limits, now));
+
+        settle(added.first->second, now);
     }
 }
 
-void TcpServer::advance(Connection& connection) {
+void TcpServer::advance(Connection& connection, Clock::time_point now) {
     using namespace protocol;
 
     int fd = connection.fd();
@@ -411,6 +440,10 @@ void TcpServer::advance(Connection& connection) {
     // was just sent.
     connection.sendFinIfDue();
 
-    if (connection.finished())
+    if (connection.finished()) {
         closeConnection(fd);
+        return;
+    }
+
+    settle(connection, now);
 }

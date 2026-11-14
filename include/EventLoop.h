@@ -1,7 +1,7 @@
 #pragma once
 
-#include "FileDescriptor.h"
 #include "Poller.h"
+#include "Waker.h"
 
 #include <chrono>
 #include <csignal>
@@ -27,8 +27,8 @@ struct Completion {
     bool failed;
 };
 
-// The loop every socket is served from. It owns the poller, the wakeup
-// pipe and the completion queue, and decides when to sleep and for how
+// The loop every socket is served from. It owns the poller, the waker
+// and the completion queue, and decides when to sleep and for how
 // long. What to do when something happens is the Handler's business.
 class EventLoop {
 public:
@@ -44,7 +44,8 @@ public:
         virtual void onShutdownRequested() = 0;
 
         // A worker has finished a request.
-        virtual void onCompletion(Completion& completion) = 0;
+        virtual void onCompletion(Completion& completion,
+                                  Clock::time_point now) = 0;
 
         // Called once per iteration, just before the loop sleeps. Deals
         // with whatever has run out of time, and returns how long the
@@ -60,10 +61,8 @@ public:
 private:
     std::unique_ptr<Poller> watcher;
 
-    // A byte written to one end makes the poller report the other end,
-    // which is how another thread or a signal handler ends the sleep.
-    FileDescriptor wakeRead;
-    FileDescriptor wakeWrite;
+    // How another thread or a signal handler ends the sleep.
+    Waker waker;
 
     std::mutex completionMutex;
     std::queue<Completion> completions;
@@ -71,10 +70,8 @@ private:
     volatile std::sig_atomic_t shutdownRequested = 0;
     bool stopped = false;
 
-    void wake();
-
 public:
-    // Throws std::system_error if the wakeup pipe cannot be created.
+    // Throws std::system_error if the waker cannot be created.
     EventLoop();
 
     // For registering descriptors. Only for the loop's own thread.
