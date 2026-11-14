@@ -627,6 +627,16 @@ Verified in CI, GitHub Actions run 43618623422 on commit `b474ad0`: all
 six jobs pass on the first run, no warnings. The Ubuntu jobs run 165
 tests, the macOS jobs 147.
 
+The run after it, on a commit that changed only documentation, failed
+in one job (Ubuntu ASan+UBSan). A STATS test read `tasks_completed` as
+0 just after an ECHO had been answered. The test was wrong, not the
+server: a worker hands its result to the event loop first and is
+counted as done a moment later, so the counters that workers keep can
+trail a response. Three tests assumed otherwise. They now ask again
+until the counters have caught up, and protocol.md says which counters
+are exact and which can trail. Repeated under ASan on one CPU in the
+Linux container, 15 runs per poller: no failures.
+
 Not verified:
 
 - ERROR 6 from a running server. Nothing a client can send makes a

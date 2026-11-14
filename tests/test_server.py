@@ -1082,6 +1082,19 @@ class StatsTest(ServerTestCase):
     def stats(self, s, request_id=1):
         return protocol.parse_stats(protocol.request(s, STATS, request_id))
 
+    def stats_once(self, s, ready):
+        # A worker hands its result to the event loop first and is
+        # counted as done a moment later, so the counters that workers
+        # keep can trail the response the client has already read. Ask
+        # again until they have caught up.
+        deadline = time.time() + 5
+        while True:
+            stats = self.stats(s)
+            if ready(stats):
+                return stats
+            self.assertLess(time.time(), deadline, f"last stats: {stats}")
+            time.sleep(0.01)
+
     def test_reports_the_configuration(self):
         s = connect()
         stats = self.stats(s)
@@ -1123,7 +1136,9 @@ class StatsTest(ServerTestCase):
             self.assertEqual(protocol.request(s, PING, i), (PING | RESPONSE, i, b""))
         self.assertEqual(protocol.request(s, 9, 1)[0], ERROR)
 
-        after = self.stats(s)
+        after = self.stats_once(
+            s, lambda now: now["tasks_completed"] >= before["tasks_completed"] + 20
+        )
 
         # PING, STATS and the rejected request never reach the pool.
         self.assertEqual(after["tasks_submitted"] - before["tasks_submitted"], 20)
@@ -1141,8 +1156,10 @@ class StatsTest(ServerTestCase):
         s.sendall(busy)
         self.assertEqual(protocol.recv_frame(s)[0], COMPUTE | RESPONSE)
 
-        grown = self.stats(s)["worker_busy_us"] - before["worker_busy_us"]
-        self.assertGreater(grown, 250000)
+        after = self.stats_once(
+            s, lambda now: now["tasks_completed"] > before["tasks_completed"]
+        )
+        self.assertGreater(after["worker_busy_us"] - before["worker_busy_us"], 250000)
         s.close()
 
     def test_keeps_its_place_in_the_pipeline(self):
@@ -1156,8 +1173,9 @@ class StatsTest(ServerTestCase):
 
         frame = protocol.recv_frame(s)
         self.assertEqual(frame[:2], (STATS | RESPONSE, 2))
-        # The ECHO before it has been through a worker by now.
-        self.assertGreaterEqual(protocol.parse_stats(frame)["tasks_completed"], 1)
+        # The ECHO before it was handed to a worker before this was
+        # answered. That it is counted as completed is not certain yet.
+        self.assertGreaterEqual(protocol.parse_stats(frame)["tasks_submitted"], 1)
 
         self.assertEqual(protocol.recv_frame(s), (PING | RESPONSE, 3, b""))
         s.close()

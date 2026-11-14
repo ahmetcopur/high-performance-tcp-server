@@ -84,6 +84,12 @@ The response payload is ten 64-bit integers in this order, 80 bytes:
 Fields may be added at the end in a later revision. A client must accept
 a payload longer than 80 bytes and ignore what it does not know.
 
+The counters that workers keep (`tasks_completed`, `tasks_failed`,
+`worker_busy_us`) can trail a response by a moment. A worker hands its
+result to the event loop first and is counted as done just after, so a
+STATS sent right behind a request may not include that request yet.
+`tasks_submitted` and `tasks_rejected` are exact.
+
 PING and STATS are answered without a worker, so they are still served
 while every worker is busy, and they are not counted in the task
 counters. The share of time the workers were busy between two STATS
