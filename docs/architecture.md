@@ -13,8 +13,12 @@ Each responsibility has one home.
 | `main.cpp` | Parses the options, installs the signal handler, starts the server. Nothing else. |
 | `Config` | The options, their defaults and their allowed ranges. |
 | `TcpServer` | The listening socket, the accept logic, the map of connections, which request goes to a worker, and how a shutdown goes. |
-| `EventLoop` | The loop itself: the poller, the wakeup pipe, the completion queue, and when to sleep and for how long. |
-| `Poller`, `PollPoller` | Waiting for descriptors. `Poller` is the interface, `PollPoller` does it with `poll()`. |
+| `EventLoop` | The loop itself: the poller, the waker, the completion queue, and when to sleep and for how long. |
+| `Poller` | The interface for waiting on descriptors: add, modify, remove, wait. |
+| `PollPoller` | `Poller` with `poll()`. Works everywhere. |
+| `EpollPoller` | `Poller` with epoll. Linux only, and the default there. |
+| `Waker` | Ends the loop's sleep from another thread or a signal handler. An eventfd on Linux, a pipe elsewhere. |
+| `TimerQueue` | The deadlines of all connections, as a min-heap. |
 | `Connection` | One client: its socket, input and output buffers, state, and deadlines. |
 | `Protocol` | Encoding and decoding frames, validating requests, the COMPUTE hash. No sockets. |
 | `Buffer` | A byte queue with a read offset. |
@@ -50,20 +54,20 @@ effort.
 
 Descriptors have exactly one owner each. A `Connection` owns its
 socket, `TcpServer` owns the listening socket and the spare descriptor,
-`EventLoop` owns both ends of the wakeup pipe. Each is a
+`EventLoop` owns the waker and the poller. Each descriptor is a
 `FileDescriptor`, so a descriptor is closed when its owner is destroyed
 and at no other time.
 
 ## Threads
 
 One thread, the event loop, owns every socket and every connection. It
-waits in `poll()`, accepts, reads, decodes, and writes.
+waits in the poller, accepts, reads, decodes, and writes.
 
 A pool of worker threads runs the requests that cost CPU time (ECHO and
 COMPUTE). A worker is given a copy of the request and the id of the
 connection it came from. It never sees a socket or a connection object.
 When it is done it puts the encoded response on the completion queue and
-wakes the event loop through a pipe.
+wakes the event loop through the waker.
 
 The two sides share exactly two things: the pool's task queue and the
 completion queue, each behind its own mutex.
@@ -162,6 +166,65 @@ on its own:
 error is fetched with `getsockopt(SO_ERROR)` and logged, at most one line
 per second.
 
+With epoll the same rules hold, with one addition. epoll has a separate
+flag, `EPOLLRDHUP`, for "the peer has finished sending", which `poll()`
+on Linux shows only as readable. `EpollPoller` reports it as a hangup,
+and asks for it only together with input. A connection in ReadClosed
+has stopped reading and may still be sending responses. If
+`EPOLLRDHUP` were registered for it, it would be reported on every wait,
+look like a hangup while not reading, and the server would close the
+connection and drop what it owes. A unit test holds both pollers to
+this.
+
+## Pollers
+
+`--poller poll` or `--poller epoll` chooses how the loop waits.
+
+**poll** is given the full list of descriptors on every call, and the
+kernel looks at each one. The cost of a wait grows with the number of
+connections, whether they are active or not.
+
+**epoll** keeps the list in the kernel. Descriptors are registered
+once, changed when their interest changes, and a wait returns only the
+ones that are ready. The cost of a wait depends on how many are ready.
+It exists only on Linux, where it is the default. The code is compiled
+only there.
+
+Three things in the server follow from this:
+
+1. **Interest is changed only when it changes.** With epoll a change is
+   a system call. `EpollPoller` remembers what each descriptor is
+   registered for and skips the call when nothing would change.
+2. **Output is watched only while there is output.** A socket with room
+   in its send buffer is always writable. Watching for that with
+   nothing to send would wake the loop without pause.
+3. **Nothing visits every connection per iteration.** Deadlines come
+   from a heap and interest is updated per event, see Timeouts. A scan
+   over all connections would cost what epoll saves.
+
+Both pollers are level-triggered: a descriptor is reported for as long
+as it is ready. The server may take part of what is there and will be
+told again.
+
+### Why not edge-triggered
+
+Edge-triggered epoll reports a descriptor once, when it becomes ready,
+and not again until it stops being ready and becomes ready anew. It can
+save wakeups, at a price:
+
+- **Everything must be read until `EAGAIN`.** If the server takes part
+  of the input and stops, no further event comes for what is left, and
+  the connection hangs. The same goes for writing.
+- **Reading until `EAGAIN` lets one connection starve the others.** A
+  client that sends as fast as the server reads keeps the loop on its
+  socket. A fair server has to stop after some amount and remember to
+  come back, which means keeping its own list of ready connections.
+
+The server reads at most one frame's worth per event, on purpose, as
+part of its input limit. That is exactly what edge-triggered mode does
+not allow without the extra bookkeeping. It is left out until a
+measurement shows that the saved wakeups matter.
+
 ## Timeouts
 
 A connection is always in exactly one phase, decided by what it is
@@ -213,10 +276,27 @@ serve needs to read about half its receive buffer. With the default of
 10 s and a buffer that has grown to 4 MiB, that is a client reading
 about 200 KiB/s.
 
-The event loop finds the nearest deadline by looking at every connection
-once per iteration and passes it to `poll()` as its timeout. This is a
-linear scan, which adds nothing while `poll()` itself looks at every
-descriptor on every call.
+### How deadlines are kept
+
+Deadlines are in a `TimerQueue`, a min-heap ordered by time. The loop
+sleeps until the earliest one.
+
+A connection's deadline changes whenever something happens to it, far
+more often than it runs out. Searching the heap on every change would
+be the expensive part, so the heap uses lazy deletion: a changed or
+cancelled deadline leaves its old entry where it is, and the entry is
+thrown away when it reaches the top and is seen to be out of date.
+
+An entry promises only that the connection is due no later than its
+time. Deadlines mostly move further away, as when output makes
+progress. Then nothing is pushed at all. The entry comes up at the old
+time, the connection is asked again, turns out not to be due, and goes
+back in with its real deadline. This keeps the heap at about one entry
+per connection however busy the connections are.
+
+A connection's deadline and its poll interest are brought up to date
+in one place, at the end of `TcpServer::advance()`, which runs after
+every socket event and every finished request.
 
 ## Shutdown
 
@@ -273,10 +353,10 @@ declared:
 1. Connections are closed, then the listening socket and the spare
    descriptor.
 2. Workers are told to give up their work and are joined. Until this
-   returns, a worker may still push to the completion queue and write to
-   the wake pipe.
-3. Only then can the loop go, and with it the wake pipe and the
-   completion queue. After the join this is the only thread, so what is
+   returns, a worker may still push to the completion queue and use the
+   waker.
+3. Only then can the loop go, and with it the waker and the completion
+   queue. After the join this is the only thread, so what is
    left can be destroyed in any order. The destructor of `TcpServer`
    joins the workers too, for a server that was built and never run.
 
@@ -287,7 +367,7 @@ ends through `std::terminate` without running any of this.
 
 | What | Limit | When it is reached |
 | --- | --- | --- |
-| Connections | `--max-connections` | The listening socket is left out of `poll()`. New clients wait in the kernel backlog. |
+| Connections | `--max-connections` | The listening socket is no longer watched. New clients wait in the kernel backlog. |
 | Descriptors | `ulimit -n` | Each new connection is accepted and closed at once. |
 | Frame length | `--max-frame` | ERROR 4, then Closing. |
 | Input per connection | one frame of the largest size | The server stops reading from that connection. |

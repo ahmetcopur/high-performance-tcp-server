@@ -11,9 +11,8 @@ How connections move through their states, what times out and when, and
 every limit the server enforces are in
 [docs/architecture.md](docs/architecture.md).
 
-An epoll backend is planned. See
-[docs/PROGRESS.md](docs/PROGRESS.md) for what is done, what has been
-verified, and the open issues.
+See [docs/PROGRESS.md](docs/PROGRESS.md) for what is done, what has
+been verified, and the open issues.
 
 ## Requirements
 
@@ -41,6 +40,7 @@ The default build type is `RelWithDebInfo`. Pick another one with
 
 | Option | Default | Meaning |
 | --- | --- | --- |
+| `--poller poll\|epoll` | `epoll` on Linux, `poll` elsewhere | How the event loop waits for sockets. epoll exists only on Linux. |
 | `--port N` | 8080 | TCP port on 127.0.0.1. |
 | `--workers N` | 8 | Worker threads that process requests. |
 | `--max-connections N` | 10000 | Connections served at once. Further ones wait in the backlog. |
@@ -104,20 +104,44 @@ sanitizer runtime bundled with that Xcode does not match the OS. Use
 another clang by adding, for example,
 `-DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++`.
 
+## Linux from a Mac
+
+The epoll backend exists only on Linux. The `Dockerfile` gives a Linux
+environment that builds the project and runs every test, including the
+integration suite once with `poll` and once with `epoll`:
+
+```bash
+docker build -t tcpserver-dev .
+```
+
+```bash
+docker run --rm -v "$PWD":/src:ro tcpserver-dev
+```
+
+The source is mounted read-only and the build stays inside the
+container. A sanitizer build takes its options from `CMAKE_OPTIONS`:
+
+```bash
+docker run --rm -v "$PWD":/src:ro -e CMAKE_OPTIONS="-DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON" tcpserver-dev
+```
+
 ## Layout
 
 ```text
 include/       TcpServer.h, EventLoop.h, Poller.h, PollPoller.h,
-               Connection.h, Buffer.h, FileDescriptor.h, ThreadPool.h,
-               Protocol.h, Config.h
+               EpollPoller.h, Waker.h, TimerQueue.h, Connection.h,
+               Buffer.h, FileDescriptor.h, ThreadPool.h, Protocol.h,
+               Config.h
 src/           main.cpp and one .cpp per header (ThreadPool and Poller
                are header-only)
 tests/         test_buffer.cpp, test_config.cpp, test_connection.cpp,
                test_file_descriptor.cpp, test_poller.cpp,
-               test_protocol.cpp, test_threadpool.cpp (GoogleTest)
+               test_protocol.cpp, test_threadpool.cpp,
+               test_timer_queue.cpp, test_waker.cpp (GoogleTest)
                test_server.py (black-box, starts the real server)
                protocol.py (Python client for the protocol)
 docs/          architecture.md, protocol.md, PROGRESS.md
+Dockerfile     Linux environment for building and testing
 benchmark.py   quick load script, not a rigorous benchmark
 ```
 

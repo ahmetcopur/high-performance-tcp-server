@@ -13,7 +13,7 @@ comparable.
 - [x] 4. Connection lifecycle, half-close, and timeouts
 - [x] 5. Graceful shutdown policy
 - [x] 6. Refactor into modules
-- [ ] 7. Linux epoll backend
+- [x] 7. Linux epoll backend
 - [ ] 8. Thread pool engineering
 - [ ] 9. Rebuild the benchmark suite
 - [ ] 10. Profiling, then optimization
@@ -453,6 +453,99 @@ Not verified:
   until its output has drained, not the byte at which it resumes.
 - Any performance effect of the refactor. Nothing was measured.
 
+## Step 7: epoll backend (2026-11-14)
+
+What changed: the event loop can wait with epoll on Linux
+(`--poller epoll`, the default there) or with `poll()` (`--poller poll`,
+the only choice elsewhere). Wakeups use an eventfd on Linux and a pipe
+elsewhere. Deadlines are kept in a min-heap with lazy deletion, and
+nothing visits every connection per iteration any more. A `Dockerfile`
+gives a Linux environment for running all of it from a Mac. The design
+is in [architecture.md](architecture.md) under Pollers and Timeouts.
+
+Decisions:
+
+- **`EPOLLRDHUP` is requested only together with input** and reported
+  as a hangup. Requested always, it would make a connection that has
+  stopped reading look hung up while it still owes responses.
+- **The timer queue promises "no later than".** A deadline that moves
+  further away pushes nothing. The entry comes up at the old time and
+  the connection is armed again. The heap stays at about one entry per
+  connection.
+- **Interest and deadline are updated per event**, at the end of
+  `TcpServer::advance()`, where the previous step updated them for
+  every connection on every iteration.
+- **`Poller::add()` can fail** and returns false. epoll has a system
+  limit on watched descriptors. A connection that cannot be watched is
+  dropped at accept.
+- **`Waker` is its own small class**, so that the difference between
+  eventfd and a pipe is in one file.
+- **Edge-triggered mode is not implemented.** The brief makes it
+  conditional on a measured benefit, and nothing has been measured yet.
+  Why it is harder is written up in architecture.md.
+- **The option is `--poller epoll`**, two words like every other
+  option, where the brief wrote `--poller=epoll`.
+
+How the two backends are held to the same behaviour:
+
+- The poller unit tests are one suite that runs against `PollPoller`
+  and, on Linux, `EpollPoller`: 14 tests each.
+- CTest registers the integration suite once per poller the platform
+  has: `integration_poll` everywhere and `integration_epoll` on Linux.
+
+New tests: `Waker` 7, `TimerQueue` 15, pollers 5 more shared and 3 for
+epoll only, `Config` 5, and one integration test, "idle connections
+cost no CPU". Run against an `EpollPoller` changed to always register
+`EPOLLOUT`, that test fails with 1.99 s of CPU in 2 s.
+
+Verified in the Linux container (Ubuntu 24.04, g++ 13.3.0), warnings
+as errors, no warnings. Every run includes the integration suite on
+both pollers:
+
+| Configuration | Result |
+| --- | --- |
+| Release | 140 of 140 tests pass |
+| Debug, `ENABLE_ASAN`, two runs | 140 of 140 |
+| Debug, `ENABLE_TSAN`, two runs | 140 of 140 |
+| Image built from the `Dockerfile`, default command | 140 of 140 |
+
+The 140 are 138 GoogleTest cases, `integration_poll` and
+`integration_epoll`. The integration suite has 55 tests.
+
+With `--poller epoll` a running server holds one epoll instance and one
+eventfd. With `--poller poll` on Linux it holds the eventfd only.
+Checked by listing `/proc/<pid>/fd`.
+
+Verified on the Mac, two `ctest` runs each, warnings as errors, no
+warnings. epoll does not exist there, so this is `poll` with a pipe:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| Release | Apple clang 17 | 122 of 122 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 122 of 122 |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 122 of 122 |
+
+`--poller epoll` is refused on the Mac with a message.
+
+Step 6 follow-up: the refactored server from step 6 was run under
+ASan+UBSan on the Mac after the machine was awake again, 90 of 90
+twice. Step 6 had recorded that as not done locally.
+
+Verified in CI, GitHub Actions run 43592879117 on commit `9dbf657`: all
+six jobs pass on the first run, no warnings. The three Ubuntu jobs
+(g++ 15.2.0) run 140 tests each, with `integration_poll` and
+`integration_epoll` both passing. The three macOS jobs run 122.
+
+Not verified:
+
+- That epoll is faster. Nothing was measured. The benchmark suite is
+  step 9.
+- `Poller::add()` failing in the running server. The unit tests make it
+  fail for a closed descriptor and a duplicate, not for the system
+  limit.
+- The server with thousands of connections on either backend.
+- Edge-triggered mode, which does not exist.
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -517,3 +610,9 @@ Not verified:
     test fails or stalls, and connections held open are closed by the
     idle limit because the monotonic clock on macOS keeps counting
     during sleep. Seen on 2026-11-14 with the lid closed overnight.
+21. **`EpollPoller::modify()` and `remove()` ignore errors from
+    `epoll_ctl`.** For a descriptor that is registered and open they
+    can only fail for lack of kernel memory.
+22. **A timer entry for a closed connection stays in the heap until its
+    time comes**, at most the idle timeout. Memory for it is one small
+    entry per connection closed in that window.
