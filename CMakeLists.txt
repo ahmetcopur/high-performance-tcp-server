@@ -55,9 +55,11 @@ add_library(tcpserver STATIC
     src/Buffer.cpp
     src/Config.cpp
     src/Connection.cpp
+    src/EventLoop.cpp
     src/FileDescriptor.cpp
     src/PollPoller.cpp
-    src/Protocol.cpp)
+    src/Protocol.cpp
+    src/TcpServer.cpp)
 target_include_directories(tcpserver PUBLIC include)
 target_link_libraries(tcpserver
     PUBLIC Threads::Threads

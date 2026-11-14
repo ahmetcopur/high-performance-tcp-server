@@ -1,5 +1,6 @@
 #include "FileDescriptor.h"
 
+#include <fcntl.h>
 #include <unistd.h>
 
 FileDescriptor& FileDescriptor::operator=(FileDescriptor&& other) noexcept {
@@ -16,4 +17,10 @@ void FileDescriptor::reset(int descriptor) {
         close(fd);
 
     fd = descriptor;
+}
+
+bool FileDescriptor::setNonBlocking() {
+    int flags = fcntl(fd, F_GETFL, 0);
+
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0;
 }

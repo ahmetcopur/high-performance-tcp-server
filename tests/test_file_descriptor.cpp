@@ -83,3 +83,18 @@ TEST(FileDescriptor, ResetClosesAndTakesTheNewOne) {
     EXPECT_FALSE(isOpen(second));
     EXPECT_FALSE(descriptor.valid());
 }
+
+TEST(FileDescriptor, SetNonBlockingSetsTheFlag) {
+    FileDescriptor descriptor(openNull());
+    ASSERT_EQ(fcntl(descriptor.get(), F_GETFL) & O_NONBLOCK, 0);
+
+    EXPECT_TRUE(descriptor.setNonBlocking());
+
+    EXPECT_NE(fcntl(descriptor.get(), F_GETFL) & O_NONBLOCK, 0);
+}
+
+TEST(FileDescriptor, SetNonBlockingFailsWithoutADescriptor) {
+    FileDescriptor descriptor;
+
+    EXPECT_FALSE(descriptor.setNonBlocking());
+}

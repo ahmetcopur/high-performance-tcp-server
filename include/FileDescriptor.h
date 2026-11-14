@@ -36,4 +36,8 @@ public:
 
     // Closes the descriptor held, if any, and takes over the new one.
     void reset(int descriptor = -1);
+
+    // Makes reads and writes return at once instead of waiting. Returns
+    // false if the descriptor refused.
+    bool setNonBlocking();
 };
