@@ -23,7 +23,8 @@ Each responsibility has one home.
 | `Protocol` | Encoding and decoding frames, validating requests, the COMPUTE hash. No sockets. |
 | `Buffer` | A byte queue with a read offset. |
 | `FileDescriptor` | Owns one descriptor and closes it. The only place that calls `close()`. |
-| `ThreadPool` | The worker threads and their task queue. |
+| `ThreadPool` | The worker threads, their bounded task queue, and the counters. |
+| `RequestHandler` | What a worker does with a request: ECHO, COMPUTE, and turning a failure into ERROR 6. |
 
 `EventLoop` knows nothing about connections or the protocol. It calls
 back into a `Handler`, which `TcpServer` implements, for the four things
@@ -71,6 +72,63 @@ wakes the event loop through the waker.
 
 The two sides share exactly two things: the pool's task queue and the
 completion queue, each behind its own mutex.
+
+## The worker pool
+
+The pool has a fixed number of threads and one queue of tasks. The
+queue has a capacity, `--queue-capacity` (default 1024). The capacity
+counts tasks that are waiting, not tasks being run.
+
+A task is any callable, including one that can only be moved, which a
+request frame captured by value is. It is stored behind a small
+interface with one virtual function, one allocation per task. The old
+pool wrapped every task in a `shared_ptr` to a `packaged_task` inside a
+`std::function` and returned a `std::future` that nobody read.
+
+`trySubmit()` returns false when the queue is full or the pool is
+shutting down, and in that case leaves the task untouched. It does not
+throw and it does not block.
+
+A task that throws does not end its worker. The pool counts it and
+goes on.
+
+### What happens when the queue is full
+
+The request is answered with ERROR 5, "server busy", and the
+connection stays open. This is cheap, it is immediate, and the client
+learns something it can act on.
+
+The alternative is to stop reading from that connection until the
+queue has room, the way a connection is throttled when its output
+backs up. The client would then simply be served later, without seeing
+an error. It was not chosen, for three reasons:
+
+- The connection would have to be woken when room appears, which needs
+  a list of waiting connections and a decision about which goes first.
+- A queue that is full for long means the server is behind, and making
+  every client wait in silence hides that from them.
+- Requests would pile up in socket buffers on both sides, where
+  nothing counts them.
+
+The price of the chosen policy is that a client which ignores ERROR 5
+and keeps sending costs the event loop one error frame per request.
+
+### What happens when a request fails
+
+A worker that hits an exception while handling a request answers that
+request with ERROR 6, "internal error". The connection stays open. If
+even the error cannot be built, the worker sends back an empty result
+and the event loop closes the connection, so the client is never left
+waiting for an answer that will not come.
+
+### Counters
+
+The pool counts tasks submitted, rejected, completed and failed, and
+adds up the time its workers spend running tasks. Together with the
+queue depth these are what STATS reports and what
+`--stats-interval-ms` logs. The submit counters are kept under the
+queue's mutex, which is held anyway. The worker counters are atomics,
+so a worker finishing a task takes no lock for them.
 
 ## Connection ids
 
@@ -374,7 +432,5 @@ ends through `std::terminate` without running any of this.
 | Requests in flight per connection | 1 | Further requests wait as bytes in the input buffer. |
 | Output per connection | `--output-high-water` | The server stops reading and decoding for that connection until the output drains to half. |
 | COMPUTE iterations | 100,000 | ERROR 7, the connection stays open. |
+| Requests waiting for a worker | `--queue-capacity` | ERROR 5 for that request, the connection stays open. |
 | Shutdown | `--shutdown-timeout-ms` | Remaining connections are closed as they are and work in progress is abandoned. |
-
-The worker pool's task queue has no limit yet. It holds at most one
-task per connection.

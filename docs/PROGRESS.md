@@ -14,7 +14,7 @@ comparable.
 - [x] 5. Graceful shutdown policy
 - [x] 6. Refactor into modules
 - [x] 7. Linux epoll backend
-- [ ] 8. Thread pool engineering
+- [x] 8. Thread pool engineering
 - [ ] 9. Rebuild the benchmark suite
 - [ ] 10. Profiling, then optimization
 - [ ] 11. Reliability and fault injection
@@ -546,6 +546,96 @@ Not verified:
 - The server with thousands of connections on either backend.
 - Edge-triggered mode, which does not exist.
 
+## Step 8: thread pool (2026-11-14)
+
+What changed: the worker pool's queue is bounded
+(`--queue-capacity`, default 1024) and `trySubmit()` returns false when
+it is full. A request that finds it full is answered with ERROR 5,
+"server busy", and the connection stays open. A request that fails
+inside a worker is answered with ERROR 6, "internal error", where the
+connection used to be closed. Tasks are stored as move-only callables
+with one allocation each. The pool keeps counters, which the new STATS
+request reports and `--stats-interval-ms` logs. Details are in
+[architecture.md](architecture.md) under "The worker pool" and in
+[protocol.md](protocol.md).
+
+Decisions:
+
+- **Full queue: answer "server busy", do not stop reading.** The brief
+  asked for this choice and the alternative to be written down. Both
+  are in architecture.md.
+- **A refused task is left untouched.** `trySubmit()` checks for room
+  before it builds anything, so nothing is moved out of the caller's
+  callable.
+- **The capacity counts waiting tasks**, not the ones being run.
+- **The future-returning `enqueue()` is gone.** Nothing used the
+  future.
+- **A task that throws is caught by the pool** and counted. The worker
+  goes on.
+- **STATS is answered on the event loop**, like PING, so it works while
+  every worker is busy. It carries ten 64-bit counters, and fields may
+  be added at the end.
+- **`RequestHandler` is a new small module** with what a worker does
+  with a request. It was a function inside `TcpServer.cpp` and could
+  not be unit-tested there.
+- **A completion with an empty response closes the connection.** It
+  replaces the `failed` flag, and only happens if a worker cannot build
+  even the error.
+- **The completion queue already drained by swapping** since step 3,
+  and already woke the loop only on empty to non-empty. Nothing changed
+  there.
+
+New tests: `ThreadPool` rewritten, 15 tests, among them refusal at
+capacity, a refused task left intact, each producer's order with one
+worker, a throwing task, shutdown with tasks queued, and eight
+producers into a queue of 16 with four workers, every task run exactly
+once. `RequestHandler` 9. Protocol 5 for STATS. Config 1. Integration
+8: five for STATS, the full queue, and the log line on and off.
+
+With the queue made so large that it never fills, the full-queue test
+fails: the late request waits 1.7 s for the worker where it should be
+refused within 0.5 s.
+
+Verified in the Linux container (image from the `Dockerfile`, Ubuntu
+24.04, g++ 13.3.0), two `ctest` runs each, warnings as errors, no
+warnings, integration suite on both pollers:
+
+| Configuration | Result |
+| --- | --- |
+| Release | all tests pass |
+| Debug, `ENABLE_ASAN` | 165 of 165 |
+| Debug, `ENABLE_TSAN` | 165 of 165 |
+
+The Release runs were started before the last two unit tests were
+added and ran 163. The 165 are 163 GoogleTest cases, `integration_poll`
+and `integration_epoll`. The integration suite has 63 tests.
+
+Verified on the Mac, two `ctest` runs each, warnings as errors, no
+warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| Release | Apple clang 17 | 147 of 147 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 147 of 147 |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 147 of 147 |
+
+The pool's stress test, eight producers and four workers on a queue of
+16, is part of every one of these runs, including TSan on both
+platforms.
+
+Verified in CI, GitHub Actions run 43618623422 on commit `b474ad0`: all
+six jobs pass on the first run, no warnings. The Ubuntu jobs run 165
+tests, the macOS jobs 147.
+
+Not verified:
+
+- ERROR 6 from a running server. Nothing a client can send makes a
+  worker throw. The conversion is unit-tested in `RequestHandler`, and
+  the pool's handling of a throwing task in `ThreadPool`.
+- The empty-completion path, for the same reason.
+- Whether one allocation per task matters. Nothing was measured.
+- The pool under real load. The stress test is a unit test.
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -555,8 +645,10 @@ Not verified:
    and an ASan binary hangs before `main`, even for a hello-world.
    Sanitizer builds on this machine need
    `-DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++`.
-3. **No test triggers a worker exception.** The `Completion::failed`
-   path in the server has never run under any test.
+3. **No test makes a running server's worker throw.** The pieces are
+   unit-tested since step 8: a failing request becomes ERROR 6, and a
+   throwing task does not stop its worker. The path through the server
+   has never run.
 4. *Resolved in step 3.* All sources are now clang-formatted.
 5. **`.clang-format` is not enforced in CI.**
 6. **The default connection limit is above common descriptor limits.**
@@ -578,8 +670,8 @@ Not verified:
     over about 1 MiB, keeps one worker busy for a long time. Since step
     5 it is cancelled at the end of a shutdown, but not when its own
     connection goes away.
-11. **A worker exception closes the connection.** Step 8 turns it into
-    ERROR 6.
+11. *Resolved in step 8.* A request that fails in a worker is answered
+    with ERROR 6 and the connection stays open.
 12. **`Buffer` keeps its capacity.** After one large frame a connection
     holds that much memory until it closes, even when idle. It is
     bounded by the limits, but not returned.
@@ -616,3 +708,7 @@ Not verified:
 22. **A timer entry for a closed connection stays in the heap until its
     time comes**, at most the idle timeout. Memory for it is one small
     entry per connection closed in that window.
+23. **A client that ignores "server busy" costs the event loop an
+    error frame per request.** Nothing slows such a client down.
+24. **`--stats-interval-ms` wakes the loop on every interval** even
+    when nothing else is happening.

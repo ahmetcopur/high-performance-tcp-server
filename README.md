@@ -4,8 +4,8 @@ A concurrent TCP server in C++17 on POSIX. A single-threaded `poll()` event
 loop owns all sockets and hands each request to a worker thread pool.
 
 Clients talk to it in a small binary protocol with length-prefixed
-frames: PING, ECHO, and COMPUTE (a hash loop that stands in for CPU
-work). The format is in [docs/protocol.md](docs/protocol.md).
+frames: PING, ECHO, COMPUTE (a hash loop that stands in for CPU work),
+and STATS (the server's counters). The format is in [docs/protocol.md](docs/protocol.md).
 
 How connections move through their states, what times out and when, and
 every limit the server enforces are in
@@ -52,6 +52,8 @@ The default build type is `RelWithDebInfo`. Pick another one with
 | `--write-stall-timeout-ms N` | 10000 | Closes a connection that takes none of its pending output. |
 | `--linger-timeout-ms N` | 2000 | After a framing error, how long to wait for the client to close. |
 | `--shutdown-timeout-ms N` | 5000 | After SIGINT or SIGTERM, how long connections get to receive what they are owed. |
+| `--queue-capacity N` | 1024 | Requests that may wait for a worker. Beyond that a request is answered with "server busy". |
+| `--stats-interval-ms N` | 0 | If not zero, logs one line of counters this often. |
 
 Running the server with an unknown option prints this list with the
 defaults.
@@ -130,14 +132,15 @@ docker run --rm -v "$PWD":/src:ro -e CMAKE_OPTIONS="-DCMAKE_BUILD_TYPE=Debug -DE
 ```text
 include/       TcpServer.h, EventLoop.h, Poller.h, PollPoller.h,
                EpollPoller.h, Waker.h, TimerQueue.h, Connection.h,
-               Buffer.h, FileDescriptor.h, ThreadPool.h, Protocol.h,
-               Config.h
-src/           main.cpp and one .cpp per header (ThreadPool and Poller
-               are header-only)
+               RequestHandler.h, Buffer.h, FileDescriptor.h,
+               ThreadPool.h, Protocol.h, Config.h
+src/           main.cpp and one .cpp per header (Poller is an
+               interface and has none)
 tests/         test_buffer.cpp, test_config.cpp, test_connection.cpp,
                test_file_descriptor.cpp, test_poller.cpp,
-               test_protocol.cpp, test_threadpool.cpp,
-               test_timer_queue.cpp, test_waker.cpp (GoogleTest)
+               test_protocol.cpp, test_request_handler.cpp,
+               test_threadpool.cpp, test_timer_queue.cpp,
+               test_waker.cpp (GoogleTest)
                test_server.py (black-box, starts the real server)
                protocol.py (Python client for the protocol)
 docs/          architecture.md, protocol.md, PROGRESS.md
