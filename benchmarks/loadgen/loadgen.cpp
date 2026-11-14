@@ -770,6 +770,17 @@ public:
 
             counters.notSent += connection->due.size();
         }
+
+        // Close with a reset. A normal close leaves each connection's
+        // port pair unusable for half a minute or more, and a few runs
+        // with thousands of connections would use up every local port.
+        linger abort{1, 0};
+
+        for (const std::unique_ptr<Connection>& connection : connections) {
+            if (connection->socket.valid())
+                setsockopt(connection->socket.get(), SOL_SOCKET, SO_LINGER,
+                           &abort, sizeof(abort));
+        }
     }
 };
 
