@@ -184,10 +184,13 @@ class OpenLoopTest(LoadgenTestCase):
 
 
 class CoordinatedOmissionTest(LoadgenTestCase):
-    # One worker and a request that takes it tens of milliseconds, so the
-    # server can do a few dozen a second at most.
+    # One worker and a request that takes it a few milliseconds, so the
+    # server can do a few hundred a second at most. Under a sanitizer the
+    # same request takes ten times as long, and the test has to hold
+    # there too: with too few requests in two seconds there is little
+    # piling up to see.
     SERVER_OPTIONS = ("--workers", "1")
-    SLOW = ("--type", "compute", "--iterations", "100000", "--payload", "512")
+    SLOW = ("--type", "compute", "--iterations", "5000", "--payload", "512")
 
     def test_open_loop_counts_the_time_a_request_waited_to_be_sent(self):
         closed = self.loadgen(
@@ -210,9 +213,10 @@ class CoordinatedOmissionTest(LoadgenTestCase):
 
         # But a client that keeps to its schedule waited far longer for
         # its answers, and many requests were never sent at all. A closed
-        # loop cannot see either.
+        # loop cannot see either. The mean, because a percentile is left
+        # out when a slow build completes too few requests for one.
         self.assertGreater(
-            opened["latency_ns"]["p50"], 5 * closed["latency_ns"]["p50"]
+            opened["latency_ns"]["mean"], 5 * closed["latency_ns"]["mean"]
         )
         self.assertGreater(opened["requests"]["not_sent"], 0)
 
