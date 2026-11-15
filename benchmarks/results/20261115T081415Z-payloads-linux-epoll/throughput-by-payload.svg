@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420" font-family="sans-serif" font-size="12">
+<rect width="720" height="420" fill="white"/>
+<text x="80" y="28" font-size="15" font-weight="bold">Echo over 100 connections, closed loop</text>
+<line x1="80" y1="360.0" x2="530" y2="360.0" stroke="#e5e7eb"/>
+<text x="72" y="364.0" text-anchor="end">0</text>
+<line x1="80" y1="205.0" x2="530" y2="205.0" stroke="#e5e7eb"/>
+<text x="72" y="209.0" text-anchor="end">50k</text>
+<line x1="80" y1="50.0" x2="530" y2="50.0" stroke="#e5e7eb"/>
+<text x="72" y="54.0" text-anchor="end">100k</text>
+<text x="80.0" y="378" text-anchor="middle">64</text>
+<text x="170.0" y="378" text-anchor="middle">256</text>
+<text x="260.0" y="378" text-anchor="middle">1,024</text>
+<text x="350.0" y="378" text-anchor="middle">4,096</text>
+<text x="530.0" y="378" text-anchor="middle">65,536</text>
+<rect x="80" y="50" width="450" height="310" fill="none" stroke="#9ca3af"/>
+<text x="305.0" y="404" text-anchor="middle">payload in bytes (log scale)</text>
+<text transform="translate(18 205.0) rotate(-90)" text-anchor="middle">requests per second</text>
+<polyline points="80.0,37.1 170.0,17.4 260.0,53.4 350.0,116.2 530.0,314.2" fill="none" stroke="#2563eb" stroke-width="2"/>
+<line x1="80.0" y1="51.2" x2="80.0" y2="19.8" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="80.0" cy="37.1" r="3.5" fill="#2563eb"/>
+<line x1="170.0" y1="90.5" x2="170.0" y2="-9.7" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="170.0" cy="17.4" r="3.5" fill="#2563eb"/>
+<line x1="260.0" y1="95.5" x2="260.0" y2="24.9" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="260.0" cy="53.4" r="3.5" fill="#2563eb"/>
+<line x1="350.0" y1="120.3" x2="350.0" y2="103.6" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="350.0" cy="116.2" r="3.5" fill="#2563eb"/>
+<line x1="530.0" y1="315.6" x2="530.0" y2="313.4" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="530.0" cy="314.2" r="3.5" fill="#2563eb"/>
+<line x1="546" y1="62" x2="570" y2="62" stroke="#2563eb" stroke-width="2"/>
+<text x="576" y="66">median, bar from lowest to highest run</text>
+</svg>

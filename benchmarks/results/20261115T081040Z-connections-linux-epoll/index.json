@@ -1,0 +1,124 @@
+{
+  "suite": "connections",
+  "environment": {
+    "date_utc": "2026-11-15T08:10:40+00:00",
+    "os": "Ubuntu 24.04.5 LTS",
+    "kernel": "Linux 7.0.14-linuxkit",
+    "machine": "aarch64",
+    "cpu": "aarch64",
+    "cores": 8,
+    "power": null,
+    "in_container": true,
+    "python": "3.12.3",
+    "open_files_limit": {
+      "soft": 1048576,
+      "hard": 1048576,
+      "raised_to": 1048576
+    },
+    "build": {
+      "compiler": "GNU 13.3.0",
+      "compiler_path": "/usr/bin/c++",
+      "cxx_standard": "17",
+      "build_type": "Release",
+      "flags": " -O3 -DNDEBUG",
+      "sanitizer": "none",
+      "system": "Linux 7.0.14-linuxkit",
+      "processor": "aarch64"
+    },
+    "git_commit": "dafec023e3f9a80b495aa37a27803d6085a9c4ee",
+    "git_uncommitted_changes": null
+  },
+  "settings": {
+    "repetitions": 5,
+    "warmup_s": 2.0,
+    "duration_s": 5.0,
+    "poller": "epoll",
+    "client_threads": 4,
+    "server_cpus": "0-3",
+    "client_cpus": "4-7"
+  },
+  "command": "benchmarks/run.py --build /build --suite connections --poller epoll --server-cpus 0-3 --client-cpus 4-7",
+  "cells": [
+    {
+      "client_threads": null,
+      "name": "echo-64B-1c",
+      "group": "connections",
+      "workers": 4,
+      "connections": 1,
+      "idle_connections": 0,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    },
+    {
+      "client_threads": null,
+      "name": "echo-64B-10c",
+      "group": "connections",
+      "workers": 4,
+      "connections": 10,
+      "idle_connections": 0,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    },
+    {
+      "client_threads": null,
+      "name": "echo-64B-100c",
+      "group": "connections",
+      "workers": 4,
+      "connections": 100,
+      "idle_connections": 0,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    },
+    {
+      "client_threads": null,
+      "name": "echo-64B-1000c",
+      "group": "connections",
+      "workers": 4,
+      "connections": 1000,
+      "idle_connections": 0,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    },
+    {
+      "client_threads": null,
+      "name": "echo-64B-5000c",
+      "group": "connections",
+      "workers": 4,
+      "connections": 5000,
+      "idle_connections": 0,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    },
+    {
+      "client_threads": null,
+      "name": "echo-64B-10000c",
+      "group": "connections",
+      "workers": 4,
+      "connections": 10000,
+      "idle_connections": 0,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    }
+  ],
+  "skipped_for_open_files_limit": [],
+  "discarded_runs": [],
+  "finished": true
+}

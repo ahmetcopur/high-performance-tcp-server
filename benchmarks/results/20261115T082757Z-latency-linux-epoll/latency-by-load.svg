@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420" font-family="sans-serif" font-size="12">
+<rect width="720" height="420" fill="white"/>
+<text x="80" y="28" font-size="15" font-weight="bold">Latency at a fixed request rate (open loop)</text>
+<line x1="80" y1="360.0" x2="530" y2="360.0" stroke="#e5e7eb"/>
+<text x="72" y="364.0" text-anchor="end">0</text>
+<line x1="80" y1="282.5" x2="530" y2="282.5" stroke="#e5e7eb"/>
+<text x="72" y="286.5" text-anchor="end">100</text>
+<line x1="80" y1="205.0" x2="530" y2="205.0" stroke="#e5e7eb"/>
+<text x="72" y="209.0" text-anchor="end">200</text>
+<line x1="80" y1="127.5" x2="530" y2="127.5" stroke="#e5e7eb"/>
+<text x="72" y="131.5" text-anchor="end">300</text>
+<line x1="80" y1="50.0" x2="530" y2="50.0" stroke="#e5e7eb"/>
+<text x="72" y="54.0" text-anchor="end">400</text>
+<text x="80.0" y="378" text-anchor="middle">25%</text>
+<text x="253.1" y="378" text-anchor="middle">50%</text>
+<text x="426.2" y="378" text-anchor="middle">75%</text>
+<text x="530.0" y="378" text-anchor="middle">90%</text>
+<rect x="80" y="50" width="450" height="310" fill="none" stroke="#9ca3af"/>
+<text x="305.0" y="404" text-anchor="middle">request rate as a share of the measured capacity, in percent</text>
+<text transform="translate(18 205.0) rotate(-90)" text-anchor="middle">latency in microseconds</text>
+<polyline points="80.0,322.3 253.1,322.1 426.2,248.9 530.0,208.4" fill="none" stroke="#2563eb" stroke-width="2"/>
+<line x1="80.0" y1="322.3" x2="80.0" y2="322.3" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="80.0" cy="322.3" r="3.5" fill="#2563eb"/>
+<line x1="253.1" y1="322.1" x2="253.1" y2="322.1" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="253.1" cy="322.1" r="3.5" fill="#2563eb"/>
+<line x1="426.2" y1="248.9" x2="426.2" y2="248.9" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="426.2" cy="248.9" r="3.5" fill="#2563eb"/>
+<line x1="530.0" y1="208.4" x2="530.0" y2="208.4" stroke="#2563eb" stroke-width="1.5"/>
+<circle cx="530.0" cy="208.4" r="3.5" fill="#2563eb"/>
+<line x1="546" y1="62" x2="570" y2="62" stroke="#2563eb" stroke-width="2"/>
+<text x="576" y="66">median</text>
+<polyline points="80.0,272.7 253.1,263.6 426.2,117.2 530.0,41.0" fill="none" stroke="#dc2626" stroke-width="2"/>
+<line x1="80.0" y1="272.7" x2="80.0" y2="272.7" stroke="#dc2626" stroke-width="1.5"/>
+<circle cx="80.0" cy="272.7" r="3.5" fill="#dc2626"/>
+<line x1="253.1" y1="263.6" x2="253.1" y2="263.6" stroke="#dc2626" stroke-width="1.5"/>
+<circle cx="253.1" cy="263.6" r="3.5" fill="#dc2626"/>
+<line x1="426.2" y1="117.2" x2="426.2" y2="117.2" stroke="#dc2626" stroke-width="1.5"/>
+<circle cx="426.2" cy="117.2" r="3.5" fill="#dc2626"/>
+<line x1="530.0" y1="41.0" x2="530.0" y2="41.0" stroke="#dc2626" stroke-width="1.5"/>
+<circle cx="530.0" cy="41.0" r="3.5" fill="#dc2626"/>
+<line x1="546" y1="82" x2="570" y2="82" stroke="#dc2626" stroke-width="2"/>
+<text x="576" y="86">99th percentile</text>
+<polyline points="80.0,253.7 253.1,239.4 426.2,79.1 530.0,-22.5" fill="none" stroke="#059669" stroke-width="2"/>
+<line x1="80.0" y1="253.7" x2="80.0" y2="253.7" stroke="#059669" stroke-width="1.5"/>
+<circle cx="80.0" cy="253.7" r="3.5" fill="#059669"/>
+<line x1="253.1" y1="239.4" x2="253.1" y2="239.4" stroke="#059669" stroke-width="1.5"/>
+<circle cx="253.1" cy="239.4" r="3.5" fill="#059669"/>
+<line x1="426.2" y1="79.1" x2="426.2" y2="79.1" stroke="#059669" stroke-width="1.5"/>
+<circle cx="426.2" cy="79.1" r="3.5" fill="#059669"/>
+<line x1="530.0" y1="-22.5" x2="530.0" y2="-22.5" stroke="#059669" stroke-width="1.5"/>
+<circle cx="530.0" cy="-22.5" r="3.5" fill="#059669"/>
+<line x1="546" y1="102" x2="570" y2="102" stroke="#059669" stroke-width="2"/>
+<text x="576" y="106">99.9th percentile</text>
+</svg>

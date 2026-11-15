@@ -1,0 +1,82 @@
+{
+  "suite": "mix",
+  "environment": {
+    "date_utc": "2026-11-15T07:57:09+00:00",
+    "os": "macOS 26.6.2",
+    "kernel": "Darwin 25.6.0",
+    "machine": "arm64",
+    "cpu": "Apple M1",
+    "cores": 8,
+    "power": "Battery Power",
+    "in_container": false,
+    "python": "3.14.6",
+    "open_files_limit": {
+      "soft": 1048576,
+      "hard": 9223372036854775807,
+      "raised_to": 1048576
+    },
+    "build": {
+      "compiler": "AppleClang 17.0.0.17000013",
+      "compiler_path": "/usr/bin/c++",
+      "cxx_standard": "17",
+      "build_type": "Release",
+      "flags": " -O3 -DNDEBUG",
+      "sanitizer": "none",
+      "system": "Darwin 25.6.0",
+      "processor": "arm64"
+    },
+    "git_commit": "dafec023e3f9a80b495aa37a27803d6085a9c4ee",
+    "git_uncommitted_changes": true
+  },
+  "settings": {
+    "repetitions": 5,
+    "warmup_s": 2.0,
+    "duration_s": 5.0,
+    "poller": "default for the platform",
+    "client_threads": 4,
+    "server_cpus": "not pinned",
+    "client_cpus": "not pinned"
+  },
+  "command": "benchmarks/run.py --build build-release --suite mix",
+  "cells": [
+    {
+      "name": "echo-64B-100c-0idle",
+      "group": "mix",
+      "workers": 4,
+      "connections": 100,
+      "idle_connections": 0,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    },
+    {
+      "name": "echo-64B-100c-1000idle",
+      "group": "mix",
+      "workers": 4,
+      "connections": 100,
+      "idle_connections": 1000,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    },
+    {
+      "name": "echo-64B-100c-5000idle",
+      "group": "mix",
+      "workers": 4,
+      "connections": 100,
+      "idle_connections": 5000,
+      "load": {
+        "type": "echo",
+        "payload": 64
+      },
+      "rate_fraction": null
+    }
+  ],
+  "skipped_for_open_files_limit": [],
+  "discarded_runs": [],
+  "finished": true
+}
