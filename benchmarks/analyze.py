@@ -81,6 +81,8 @@ def summarize(cell, repetitions):
         "client_saturated": sum(1 for r in results if r["client"]["saturated"]),
         "suspect": sum(1 for run in repetitions if run["suspect"]),
         "mode": results[0]["config"]["mode"],
+        "client_threads": results[0]["config"]["threads"],
+        "client_poller": results[0]["config"]["poller"],
         "rate_target": results[0]["config"]["rate_target_rps"],
         "server_cpu": server("cpu_cores"),
         "worker_utilization": server("worker_utilization"),
@@ -374,12 +376,24 @@ def report(directory, index, summaries, made):
     if env["git_uncommitted_changes"]:
         commit += " plus uncommitted changes"
     add(f"| Commit | {commit} |")
-    add(f"| Poller | {settings['poller']} |")
+
+    # Result sets from before the runner wrote the name down say only
+    # that the server chose for itself: epoll on Linux, poll() elsewhere.
+    poller = settings["poller"]
+    if poller == "default for the platform":
+        poller = "epoll" if env["kernel"].startswith("Linux") else "poll"
+    add(f"| Server waits with | {poller} |")
+    add(f"| Client waits with | {', '.join(sorted({s['client_poller'] for s in summaries.values()}))} |")
     add(
         f"| Each cell | {settings['repetitions']} runs of {settings['duration_s']:g} s "
         f"after {settings['warmup_s']:g} s of warm-up, fresh server each run |"
     )
-    add(f"| Client threads | {settings['client_threads']} |")
+
+    # Taken from the runs, not the settings: a cell can ask for fewer
+    # threads than the runner's default, and never gets more threads
+    # than it has connections.
+    threads = sorted({s["client_threads"] for s in summaries.values()})
+    add(f"| Client threads | {', '.join(str(t) for t in threads)} |")
     add(f"| CPU pinning | server: {settings['server_cpus']}, client: {settings['client_cpus']} |")
     add(f"| Command | `{index['command']}` |")
     add("")
@@ -481,12 +495,12 @@ def report(directory, index, summaries, made):
         add("when more than 1% of requests were sent over a millisecond late.")
 
     add("")
-    add("| Cell | Client CPU per thread |")
-    add("| --- | ---: |")
+    add("| Cell | Client threads | Client CPU per thread |")
+    add("| --- | ---: | ---: |")
     for c in index["cells"]:
         s = summaries.get(c["name"])
         if s:
-            add(f"| {s['cell']} | {s['client_cpu']:.2f} |")
+            add(f"| {s['cell']} | {s['client_threads']} | {s['client_cpu']:.2f} |")
     add("")
 
     problems = [s for s in summaries.values() if s["suspect"] or s["connect_failures"]]

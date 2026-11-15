@@ -52,8 +52,11 @@ def echo(payload):
     return {"type": "echo", "payload": payload}
 
 
-def cell(name, load, connections=100, workers=4, idle=0, rate_fraction=None):
+def cell(name, load, connections=100, workers=4, idle=0, rate_fraction=None,
+         client_threads=None):
     return {
+        # None means the runner's --client-threads.
+        "client_threads": client_threads,
         "name": name,
         # Filled in by suite_cells(): which suite the cell belongs to.
         "group": None,
@@ -121,11 +124,17 @@ def cells_of(suite):
     if suite == "latency":
         # The first cell measures what the server can do. The others ask
         # for a fraction of that at a fixed rate.
-        return [cell("echo-64B-100c-capacity", echo(64))] + [
+        #
+        # Two client threads, not four. In an open loop a client thread
+        # spins while it waits for the next request to fall due. Four of
+        # them beside the server on one machine got in each other's way,
+        # and the client ran up to 110 ms behind its own schedule.
+        return [cell("echo-64B-100c-capacity", echo(64), client_threads=2)] + [
             cell(
                 f"echo-64B-100c-{int(fraction * 100)}pct",
                 echo(64),
                 rate_fraction=fraction,
+                client_threads=2,
             )
             for fraction in (0.25, 0.5, 0.75, 0.9)
         ]
@@ -207,7 +216,9 @@ def environment(build_dir):
         "python": platform.python_version(),
         "open_files_limit": {"soft": soft, "hard": hard},
         "build": build,
-        "git_commit": output_of(["git", "-C", ROOT, "rev-parse", "HEAD"]),
+        # The container has no git. The commit is handed in instead.
+        "git_commit": output_of(["git", "-C", ROOT, "rev-parse", "HEAD"])
+        or os.environ.get("TCPSERVER_COMMIT"),
         "git_uncommitted_changes": bool(status) if status is not None else None,
     }
 
@@ -398,7 +409,7 @@ def run_once(args, cell_config, rate):
     connections = cell_config["connections"]
     idle = cell_config["idle_connections"]
     load = cell_config["load"]
-    threads = min(args.client_threads, connections)
+    threads = min(cell_config["client_threads"] or args.client_threads, connections)
 
     server_command = pinned(
         [
@@ -428,7 +439,10 @@ def run_once(args, cell_config, rate):
             "--iterations", str(load.get("iterations", 0)),
             "--rate", str(rate),
             "--output", result_path,
-            *(["--poller", args.poller] if args.poller else []),
+            # No --poller: the client always waits the best way the
+            # platform has, whatever the server is told to use. Otherwise
+            # a run with --poller poll would slow the client down too and
+            # measure both at once.
         ],
         args.client_cpus,
     )
@@ -537,8 +551,14 @@ def main():
     skipped = [c["name"] for c in cells if c["connections"] + c["idle_connections"] + 100 > limit]
     cells = [c for c in cells if c["name"] not in skipped]
 
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    args.directory = os.path.join(args.results, f"{stamp}-{args.suite}")
+    # UTC, so that directories made on different machines and in
+    # containers sort in the order they were made.
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    system = "macos" if sys.platform == "darwin" else platform.system().lower()
+    poller = args.poller or ("epoll" if sys.platform.startswith("linux") else "poll")
+    args.directory = os.path.join(
+        args.results, f"{stamp}-{args.suite}-{system}-{poller}"
+    )
     os.makedirs(os.path.join(args.directory, "runs"))
 
     index = {
@@ -548,7 +568,7 @@ def main():
             "repetitions": args.repetitions,
             "warmup_s": args.warmup,
             "duration_s": args.duration,
-            "poller": args.poller or "default for the platform",
+            "poller": poller,
             "client_threads": args.client_threads,
             "server_cpus": args.server_cpus or "not pinned",
             "client_cpus": args.client_cpus or "not pinned",
@@ -603,8 +623,9 @@ def main():
             path = os.path.join(
                 args.directory, "runs", f"{cell_config['name']}.rep{repetition}.json"
             )
+            # Compact: a suite writes dozens of these.
             with open(path, "w") as f:
-                json.dump(run, f, indent=1)
+                json.dump(run, f, separators=(",", ":"))
                 f.write("\n")
 
             result = run["loadgen"]
