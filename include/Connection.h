@@ -103,10 +103,6 @@ private:
 
     Phase computePhase() const;
 
-    // How many bytes the frame at the front of the input still lacks, or
-    // 0 if that cannot be told yet.
-    std::size_t missingFromFrame() const;
-
 public:
     // limits must outlive the connection.
     Connection(std::uint64_t id, FileDescriptor socket, const Limits& limits,

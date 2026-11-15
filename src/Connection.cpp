@@ -8,10 +8,7 @@
 
 namespace {
 
-// A frame that fits in this is read in one piece and copied into the
-// input. Of a larger frame, only this much is copied. The rest is read
-// straight into the input.
-constexpr std::size_t READ_CHUNK = 16 * 1024;
+constexpr std::size_t READ_CHUNK = 64 * 1024;
 
 } // namespace
 
@@ -66,23 +63,6 @@ Connection::Connection(std::uint64_t id, FileDescriptor descriptor,
       phaseSince(now) {
 }
 
-std::size_t Connection::missingFromFrame() const {
-    using namespace protocol;
-
-    if (currentState != State::Open || input.size() < LENGTH_SIZE)
-        return 0;
-
-    std::uint32_t length = readU32(input.data());
-
-    // A length that will be refused is nothing to make room for.
-    if (length < MIN_LENGTH || length > limits->maxFrame)
-        return 0;
-
-    std::size_t whole = LENGTH_SIZE + length;
-
-    return whole > input.size() ? whole - input.size() : 0;
-}
-
 bool Connection::receive() {
     char chunk[READ_CHUNK];
 
@@ -94,31 +74,16 @@ bool Connection::receive() {
         room -= input.size();
 
     while (room > 0) {
-        // Once the start of a large frame is in, its length is known,
-        // and the rest is read to where it belongs. Reading it into
-        // `chunk` and copying it from there was a fifth of the event
-        // loop's time with 64 KiB payloads.
-        std::size_t missing = missingFromFrame();
-        bool direct = missing > sizeof(chunk);
-        std::size_t wanted = direct ? missing : std::min(sizeof(chunk), room);
-        char* target = direct ? input.writable(wanted) : chunk;
-
-        ssize_t n = recv(socket.get(), target, wanted, 0);
+        std::size_t wanted = std::min(sizeof(chunk), room);
+        ssize_t n = recv(socket.get(), chunk, wanted, 0);
 
         if (n > 0) {
             auto count = static_cast<std::size_t>(n);
 
-            if (direct)
-                input.written(count);
-            else if (currentState == State::Open)
+            if (currentState == State::Open)
                 input.append({chunk, count});
 
             room -= count;
-
-            // The frame is complete, or the socket is empty. Either way
-            // there is a request to serve or nothing to read.
-            if (direct)
-                break;
 
             // Less than was asked for, so the socket is empty now, and
             // asking again would only be told so. If more arrives, or
