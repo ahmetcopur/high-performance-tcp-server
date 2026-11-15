@@ -185,6 +185,37 @@ TEST_F(ConnectionTest, ServesNothingElseWhileARequestIsWithAWorker) {
     EXPECT_EQ(nextRequestId(), 2u);
 }
 
+// Large enough that most of it is read straight into the input, in
+// pieces of a size that has nothing to do with the frame.
+TEST_F(ConnectionTest, ALargeFrameArrivingInPiecesIsPutTogether) {
+    open();
+
+    std::string payload(200 * 1024, '.');
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload[i] = static_cast<char>('a' + i % 23);
+
+    // Two frames back to back, so that the end of the first and the
+    // start of the second arrive in one piece.
+    std::string bytes = echo(1, payload) + echo(2, "small");
+
+    for (std::size_t at = 0; at < bytes.size(); at += 3000) {
+        peerSends(bytes.substr(at, 3000));
+        ASSERT_TRUE(connection->receive());
+    }
+
+    Frame request;
+    ASSERT_TRUE(connection->nextRequest(request));
+    EXPECT_EQ(request.requestId, 1u);
+    EXPECT_EQ(request.payload, payload);
+
+    // The second frame may still be in the socket: the read that
+    // completed the first one stops there.
+    ASSERT_TRUE(connection->receive());
+    ASSERT_TRUE(connection->nextRequest(request));
+    EXPECT_EQ(request.requestId, 2u);
+    EXPECT_EQ(request.payload, "small");
+}
+
 TEST_F(ConnectionTest, AWorkersResponseGoesStraightToTheSocket) {
     open();
     arrive(echo(1));
