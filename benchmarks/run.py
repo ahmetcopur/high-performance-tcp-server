@@ -238,10 +238,13 @@ def environment(build_dir):
         "python": platform.python_version(),
         "open_files_limit": {"soft": soft, "hard": hard},
         "build": build,
-        # The container has no git. The commit is handed in instead.
-        "git_commit": output_of(["git", "-C", ROOT, "rev-parse", "HEAD"])
-        or os.environ.get("TCPSERVER_COMMIT"),
-        "git_uncommitted_changes": bool(status) if status is not None else None,
+        # The commit can be handed in: the container has no git, and a
+        # build of an older commit is not what this checkout is at.
+        "git_commit": os.environ.get("TCPSERVER_COMMIT")
+        or output_of(["git", "-C", ROOT, "rev-parse", "HEAD"]),
+        "git_uncommitted_changes": (
+            None if os.environ.get("TCPSERVER_COMMIT") or status is None else bool(status)
+        ),
     }
 
 
