@@ -168,19 +168,25 @@ class ClosedLoopTest(LoadgenTestCase):
 
 class OpenLoopTest(LoadgenTestCase):
     def test_keeps_the_rate_it_was_given(self):
+        # A low rate and wide limits. Each client thread spins for a
+        # millisecond before a request is due, and on a small machine
+        # under a sanitizer that leaves the server short of CPU: at 1000
+        # a second a CI machine with three cores reached 963. The test
+        # is there to catch a rate that is wrong by a factor, such as one
+        # applied per thread, and not to time the machine.
         result = self.loadgen(
             "--connections", "8", "--threads", "2",
-            "--warmup", "0.3", "--duration", "2", "--rate", "1000",
+            "--warmup", "0.3", "--duration", "2", "--rate", "200",
         )
 
         self.assert_nothing_failed(result)
         self.assertEqual(result["config"]["mode"], "open")
-        self.assertAlmostEqual(result["throughput_rps"], 1000, delta=30)
-        self.assertEqual(result["requests"]["not_sent"], 0)
+        self.assertAlmostEqual(result["throughput_rps"], 200, delta=20)
+        self.assertLess(result["requests"]["not_sent"], 20)
         self.assertEqual(
             result["latency_ns"]["counted_from"], "when the request was due"
         )
-        self.assertAlmostEqual(result["client"]["scheduled"], 2000, delta=40)
+        self.assertAlmostEqual(result["client"]["scheduled"], 400, delta=40)
 
 
 class CoordinatedOmissionTest(LoadgenTestCase):
