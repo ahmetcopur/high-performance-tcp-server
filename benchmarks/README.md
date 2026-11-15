@@ -7,8 +7,11 @@ How the server is measured, and how to get any number in a report again.
 | `loadgen/` | The load generator, a C++ client for the protocol. |
 | `run.py` | Runs a suite: starts servers, drives the load generator, keeps every result. |
 | `analyze.py` | Turns a results directory into `report.md` and plots. |
+| `profile.py` | Profiles the server under load with perf: CPU, system calls, allocations. Linux only. |
+| `flamegraph.py` | Draws a flame graph from the stacks `profile.py` collects. |
 | `benchmark.py` | A quick smoke test in Python. Not for numbers. |
 | `results/` | One directory per suite run, with the raw data. |
+| `profiles/` | One directory per profile. |
 
 ## Running it
 
@@ -32,9 +35,10 @@ python3 benchmarks/analyze.py benchmarks/results/<the directory it printed>
 ```
 
 Suites are `connections`, `payloads`, `compute`, `mix`, `workers`,
-`latency`, `full` (all of those) and `quick` (a few seconds, to check
-that everything works). `python3 benchmarks/run.py --help` describes
-them.
+`latency`, `full` (all of those), `quick` (a few seconds, to check that
+everything works) and `hotpath` (seven cells to run before and after a
+change to the request path). `python3 benchmarks/run.py --help`
+describes them.
 
 Every report starts with the command that produced it, so any number can
 be had again by running that command on the same commit.
@@ -51,6 +55,41 @@ docker run --rm -v "$PWD":/src -e TCPSERVER_COMMIT="$(git rev-parse HEAD)" tcpse
 Docker on a Mac runs Linux in a virtual machine. Its numbers show how
 the Linux code behaves, and are not what a Linux machine would give. The
 report says when it was made in a container.
+
+## Profiling
+
+A benchmark says how fast. A profile says where the time goes.
+`profile.py` runs the server under the load generator and looks at it
+with perf for a few seconds. It needs Linux, perf, and rights a
+container does not have by default, so it runs in a second image:
+
+```bash
+docker build -t tcpserver-dev . && docker build -t tcpserver-profile -f Dockerfile.profile .
+```
+
+```bash
+docker run --rm --init --privileged -v "$PWD":/src -e TCPSERVER_COMMIT="$(git rev-parse HEAD)" tcpserver-profile sh -c 'cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-g -fno-omit-frame-pointer" && cmake --build /build --parallel && python3 /src/benchmarks/profile.py --build /build --tool cpu'
+```
+
+The build keeps frame pointers, or perf cannot tell who called what.
+
+| `--tool` | What it does | What it writes |
+| --- | --- | --- |
+| `cpu` | Samples the server's threads about 2,000 times a second and records the call stack each time. | Shares of time for the event loop and for the workers, `stacks.folded`, `flame.svg` |
+| `syscalls` | Counts the server's system calls at the kernel's tracepoints. | Calls per request |
+| `heap` | Stops at every `malloc()` and notes who called it. Slows the server down. | Allocations per request, by caller |
+
+`--load` is `echo` (64 bytes), `large` (64 KiB), `light` or `heavy`,
+and `--workers` sets the pool. Every profile goes to
+`profiles/<time>-<tool>-<load>-<workers>w/` with a `profile.json` that
+holds its environment and its command.
+
+In a flame graph each box is a function, as wide as the share of
+samples it was on the stack for, standing on the function that called
+it. Blue boxes are the kernel.
+
+What the profiles showed and what was done about it is in
+[docs/performance.md](../docs/performance.md).
 
 ## What one measurement is
 

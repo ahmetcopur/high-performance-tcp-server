@@ -1,5 +1,14 @@
 # Benchmark results, 15 November 2026
 
+**These are the numbers from step 9, before the server was profiled.**
+Step 10 changed the request path and the throughput for small requests
+with it: echo over 100 connections went from about 110,000 to about
+325,000 requests per second on Linux. What changed and what it did is
+in [docs/performance.md](../docs/performance.md). What is said below
+about `poll()` and epoll, about heavy compute and about closed and open
+loops still holds. What is said about workers slowing echo down
+describes the server as it was.
+
 What the measurements show, with the evidence for each claim. The method
 is in [README.md](README.md). Every number below is the median of five
 runs and comes from a report under `results/`, which names the command

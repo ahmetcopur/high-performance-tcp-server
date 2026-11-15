@@ -16,7 +16,7 @@ comparable.
 - [x] 7. Linux epoll backend
 - [x] 8. Thread pool engineering
 - [x] 9. Rebuild the benchmark suite
-- [ ] 10. Profiling, then optimization
+- [x] 10. Profiling, then optimization
 - [ ] 11. Reliability and fault injection
 - [ ] 12. Polish
 
@@ -850,6 +850,157 @@ Not verified:
 - **Runs longer than five seconds.** Nothing here would show a slow
   leak or a pause that comes once a minute. Step 11 has the soak test.
 
+## Step 10: profiling, then optimization (2026-11-15)
+
+What changed: the server was profiled, the profile was written down,
+and then five changes were made one at a time, each measured before and
+after. Four were kept. Everything is in
+[performance.md](performance.md): the profiles, the bottlenecks, every
+change with its numbers, and what was looked at and left alone.
+
+Tools: `benchmarks/profile.py` runs the server under the load generator
+and looks at it with perf: CPU time by thread and by call with a flame
+graph, system calls per request, allocations per request by caller.
+`benchmarks/flamegraph.py` draws the graph. `Dockerfile.profile` is the
+Linux image with perf. The runner has a suite `hotpath`, seven cells for
+before and after.
+
+What the profile showed, for echo of 64 bytes over 100 connections with
+four workers in the Linux container: 6.7 system calls per request, over
+80% of the event loop's time in the kernel and 5% in the server's own
+code. Each response went out by way of the poller (two `epoll_ctl`),
+each request was read with two `recv`, and nearly every request woke a
+sleeping worker (1.74 `futex` calls against 0.44 with one worker).
+
+The changes:
+
+| | Change | Result |
+| --- | --- | --- |
+| 1 | Send a response at once, ask the poller only if the socket is full | Kept. Echo, 4 workers: 109,354 to 228,968 |
+| 2 | Stop reading when `recv` returns less than asked for | Kept. Echo, 4 workers: 228,968 to 313,335 |
+| 3 | Queue requests quietly, wake workers once per turn of the loop | Kept. 100 connections: 220,608 to 316,655 |
+| 4 | Send a worker's response without copying it into the output first | Kept. Echo 64 KiB: 16,147 to 20,468 |
+| 5 | Read the rest of a large frame straight into the input | Taken out. Echo 64 KiB: 20,468 to 20,541 |
+
+From before to after, Linux container, median of five runs: echo with
+one worker 223,437 to 345,928 requests per second, with four 109,354 to
+325,481, with eight 100,600 to 320,807. Light compute 170,453 to
+259,625. Heavy compute 278 to 289. Echo of 64 KiB 14,045 to 20,468.
+System calls per echo request 6.70 to 2.68. Median latency at a fixed
+30,000 requests per second 61 to 55 µs.
+
+On the Mac (macOS 26.6.2, Apple clang 17, `poll()`, not pinned, on
+battery): echo with one worker 135,232 to 175,305, with four 112,888 to
+153,185. Light and heavy compute did not move.
+
+Decisions:
+
+- **perf for all three kinds of profile.** `strace -c` and heaptrack,
+  which the brief names, were tried first. strace made the server thirty
+  times slower, and a server that slow works in larger batches, so calls
+  made once per batch looked rarer than they are. heaptrack could not
+  name a call site on this platform.
+- **Change 3 was reverted and then put back.** The hotpath suite showed
+  no gain, so it came out, as the brief says. Profiles on either side of
+  the revert disagreed with the suite, and the `connections` suite run
+  on both versions showed 40% to 50% from 10 to 1,000 connections.
+  Without the change the server has a fast and a slow way of running,
+  and the hotpath suite had caught the fast one ten times out of ten.
+  The revert and the re-apply are both in the history.
+- **Change 5 stays out though it removed a copy.** It rewrote `Buffer`
+  and gained nothing that could be measured.
+- **`TCP_NODELAY` is not set.** 200 requests sent in one piece were
+  answered as fast without it as with it. Over loopback there is no
+  delay for it to remove.
+- **Socket buffer sizes are left to the kernel.** One `send` takes a
+  whole 64 KiB response.
+- **Edge-triggered epoll stays out,** now with a measurement:
+  `epoll_wait` is 3% of the event loop's time and `epoll_ctl` is gone
+  from the request path.
+- **Several event loops were not built.** The profile now says this is
+  the next step: the one loop thread is on a CPU 93% of the time or
+  more, 70% of it in `send`. It touches everything the loop owns and
+  wants a step of its own.
+- **`finishWork()` can fail,** because it may send. The server closes
+  the connection, as when `flush()` fails.
+- **`receive()` now depends on the pollers being level-triggered.**
+  This is written where it happens and in architecture.md.
+
+Corrected from step 9: RESULTS.md and this file said that for cheap
+requests the event loop thread is full. With four workers it was on a
+CPU 71% of the time. Both places say so now.
+
+New tests, 9: one integration test, 30,000 STATS requests in one piece
+against a low output watermark, which stalls if requests held back by
+full output are not taken up again after a direct send (checked by
+removing that line: the connection is cut off after ten seconds). Four
+for the pool: one wakeup is enough for fifty queued tasks, a wakeup with
+nothing queued, quiet queueing refused and counted like submitting, and
+four producers queueing in batches with one wakeup each, checked before
+shutdown could hide a lost wakeup. Four for `Connection`: a worker's
+response goes straight to the socket, waits behind output already
+queued, is queued when the socket does not take it all (8 MiB), and
+fails when the peer is gone. Three existing tests of `Connection` were
+changed to call `receive()` twice where bytes and the peer's FIN are
+both waiting.
+
+Verified on the Mac, at commit `6b31a00`, warnings as errors, no
+warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| RelWithDebInfo | Apple clang 17 | 168 of 168 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 168 of 168 |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 168 of 168 |
+
+Verified in the Linux container (Ubuntu 24.04, g++ 13.3.0), integration
+suite on both pollers:
+
+| Configuration | Result |
+| --- | --- |
+| RelWithDebInfo | 186 of 186 |
+| Debug, `ENABLE_ASAN` | 186 of 186 |
+| Debug, `ENABLE_TSAN` | 186 of 186 |
+
+Each change was also tested by itself before it was measured: all tests
+on the Mac, and all 178 to 190 in the container.
+
+The measurements: eight result sets of the hotpath suite and two of the
+connections suite, 27 profiles, none taken while the machine slept
+except the one that was deleted.
+
+Verified in CI, GitHub Actions run 43730867830 on commit `ff868a5`: all
+six jobs pass on the first run, no warnings. The Ubuntu jobs run 186
+tests, the macOS jobs 168.
+
+Thrown away, and why:
+
+- One profile, system calls for light compute, taken just after the
+  laptop had slept. It showed a third of the usual throughput. It was
+  taken again.
+- The result sets for changes 3 and 5 are kept, including the ones that
+  showed nothing.
+
+Not verified:
+
+- **Anything on Linux hardware.** The profiles are from a virtual
+  machine, where waking an idle CPU may cost more than on hardware, and
+  perf has no hardware counters there, only a clock.
+- **Why the server without change 3 falls into its slow way of
+  running,** and when. It was seen and measured, not explained beyond
+  what performance.md says.
+- **Why change 5 gained nothing.**
+- **Why change 2 gained more than one system call in six explains.**
+  Most likely it was the two ways of running again.
+- **Why the Mac gains less.** Nothing was profiled on the Mac.
+- **`TCP_NODELAY` over a real network.**
+- **The 99th percentile at a fixed rate.** In four of the eight result
+  sets the load generator fell behind its own schedule in some runs, and
+  the tail in those is the client's. The medians are sound.
+- **The step 9 suites after the changes.** Only `hotpath` and
+  `connections` were run again. The numbers in RESULTS.md describe the
+  server before this step.
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -926,10 +1077,9 @@ Not verified:
     error frame per request.** Nothing slows such a client down.
 24. **`--stats-interval-ms` wakes the loop on every interval** even
     when nothing else is happening.
-25. **A cheap request pays for waking a worker.** Echo on Linux does
-    213,639 requests a second with one worker and 99,541 with four.
-    Every request goes to the pool, even one that costs less than the
-    hand-over. Measured in step 9, for step 10.
+25. *Resolved in step 10.* Requests are queued without a wakeup and
+    the workers are woken once per turn of the loop. Echo with four
+    workers does 94% of what it does with one.
 26. **No benchmark has run on Linux hardware.** Client and server share
     a laptop, and Linux runs in a virtual machine on it.
 27. **On the Mac the load generator is the limit at thousands of
@@ -952,3 +1102,21 @@ Not verified:
     amount in a second or two. Two of them failed once in a sanitizer
     build in step 9 and were given more room. They can fail again on a
     machine that is slow enough.
+32. **One event loop thread is the limit for small requests.** After
+    step 10 it is on a CPU 93% of the time or more, 70% of that in
+    `send`. Several event loops would be the next step. Not built.
+33. **For large payloads half of the event loop's time is copying.**
+    Two copies per request are left, into the input and out of it into
+    the request. Removing the first gained nothing (change 5).
+34. **Workers woken together contend for the queue's lock.** 0.65
+    `futex` calls per echo request with four workers against 0.26 with
+    one. The workers pay for it, not the loop.
+35. **`TCP_NODELAY` is not set.** No effect over loopback. Not tested
+    over a network, where a client that sends several requests without
+    waiting might see small answers held back.
+36. **`receive()` relies on level-triggered polling.** It stops at the
+    first short read. A poller that reports a socket only once would
+    need it to read until the socket is empty again.
+37. **A benchmark suite can miss a difference.** The server had two
+    ways of running and one suite caught only the faster. Nothing in
+    the runner looks for that.

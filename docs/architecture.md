@@ -89,6 +89,18 @@ pool wrapped every task in a `shared_ptr` to a `packaged_task` inside a
 shutting down, and in that case leaves the task untouched. It does not
 throw and it does not block.
 
+The server does not use `trySubmit()` for requests. It uses
+`tryQueue()`, which does the same and wakes nobody, and calls
+`wakeWorkers()` once per turn of the event loop, just before the loop
+waits. That wakes one sleeping worker for each request waiting, as far
+as there are sleepers. Waking a thread costs far more than a small
+request does, and a turn of the loop can bring dozens of requests. With
+a wakeup per request, four workers did half of what one did. Nothing is
+answered later for the delay: only the loop can send an answer, and it
+looks at finished work at the start of its next turn, which comes after
+the wakeup either way. The measurements are in
+[performance.md](performance.md).
+
 A task that throws does not end its worker. The pool counts it and
 goes on.
 
@@ -253,16 +265,22 @@ Three things in the server follow from this:
 1. **Interest is changed only when it changes.** With epoll a change is
    a system call. `EpollPoller` remembers what each descriptor is
    registered for and skips the call when nothing would change.
-2. **Output is watched only while there is output.** A socket with room
-   in its send buffer is always writable. Watching for that with
-   nothing to send would wake the loop without pause.
+2. **Output is watched only when the socket did not take it.** A
+   response is offered to the socket as soon as it is ready, and nearly
+   always taken whole. Only what is left over is kept, and only then is
+   the poller asked to report when the socket has room. A socket with
+   room in its send buffer is always writable, so watching for that
+   with nothing to send would wake the loop without pause.
 3. **Nothing visits every connection per iteration.** Deadlines come
    from a heap and interest is updated per event, see Timeouts. A scan
    over all connections would cost what epoll saves.
 
 Both pollers are level-triggered: a descriptor is reported for as long
 as it is ready. The server may take part of what is there and will be
-told again.
+told again. It relies on that when it reads: a `recv` that returns less
+than was asked for has emptied the socket, so the server does not ask a
+second time only to be told so. If more arrives, or the peer closes,
+the poller reports the socket again.
 
 ### Why not edge-triggered
 
@@ -280,8 +298,11 @@ save wakeups, at a price:
 
 The server reads at most one frame's worth per event, on purpose, as
 part of its input limit. That is exactly what edge-triggered mode does
-not allow without the extra bookkeeping. It is left out until a
-measurement shows that the saved wakeups matter.
+not allow without the extra bookkeeping.
+
+Step 10 measured what there is to save. On the request path the server
+no longer calls `epoll_ctl` at all, and `epoll_wait` is 3% of the event
+loop's time. Edge-triggered mode stays out.
 
 ## Timeouts
 

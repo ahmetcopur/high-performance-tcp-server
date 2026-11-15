@@ -1,7 +1,8 @@
 # TCP Server
 
-A concurrent TCP server in C++17 on POSIX. A single-threaded `poll()` event
-loop owns all sockets and hands each request to a worker thread pool.
+A concurrent TCP server in C++17 on POSIX. A single-threaded event loop
+(epoll on Linux, `poll()` elsewhere) owns all sockets and hands each
+request to a worker thread pool.
 
 Clients talk to it in a small binary protocol with length-prefixed
 frames: PING, ECHO, COMPUTE (a hash loop that stands in for CPU work),
@@ -147,23 +148,34 @@ cmake --build build-release --parallel
 python3 benchmarks/run.py --build build-release --suite quick
 ```
 
-A few results from 15 November 2026. All of them: Release build of
-commit `dafec02`, client and server on one Apple M1 laptop over
-loopback, median of five runs of five seconds, 100 connections and 4
-workers unless it says otherwise. "Linux" is Ubuntu 24.04 with g++ 13.3
-in Docker's virtual machine on that laptop, server pinned to four CPUs
-and client to four others. "Mac" is macOS 26.6.2 with Apple clang 17,
-nothing pinned. They are not what a server machine would give.
+Where the server's time goes, what was changed because of it and what
+each change did is in [docs/performance.md](docs/performance.md).
+
+A few results from 15 November 2026. All of them: Release build, client
+and server on one Apple M1 laptop over loopback, median of five runs of
+five seconds, 100 connections and 4 workers unless it says otherwise.
+"Linux" is Ubuntu 24.04 with g++ 13.3 in Docker's virtual machine on
+that laptop, server pinned to four CPUs and client to four others. "Mac"
+is macOS 26.6.2 with Apple clang 17, nothing pinned. They are not what a
+server machine would give.
+
+Before and after the profiling in step 10 (commit `4421641`, and
+`dbfc0ad` or a later commit with the same server code):
 
 | | Linux, epoll | Mac, `poll()` |
 | --- | ---: | ---: |
-| Echo of 64 bytes, requests/s | 112,807 | 122,046 |
-| The same with 5,000 idle connections beside | 99,747 | 6,085 |
-| Heavy compute with 1, 2, 4 workers, requests/s | 76, 150, 289 | 75, 147, 286 |
-| Echo at a fixed 46,290 requests/s: median, 99th percentile | 49 µs, 124 µs | not reliable |
+| Echo of 64 bytes, requests/s | 109,354 → 325,481 | 112,888 → 153,185 |
+| The same with 1 worker | 223,437 → 345,928 | 135,232 → 175,305 |
+| Heavy compute, requests/s | 278 → 289 | 291 → 286 |
+| Echo at a fixed 30,000 requests/s, median latency | 61 → 55 µs | 196 → 164 µs |
+| System calls per echo request | 6.70 → 2.68 | not counted |
 
-The second row with the server on `poll()` on Linux is 39,424. Echo is
-fastest with one worker, and RESULTS.md says why.
+From step 9, before those changes (commit `dafec02`):
+
+| | Linux, epoll | Linux, `poll()` | Mac, `poll()` |
+| --- | ---: | ---: | ---: |
+| Echo of 64 bytes with 5,000 idle connections beside, requests/s | 99,747 | 39,424 | 6,085 |
+| Heavy compute with 1, 2, 4 workers, requests/s | 76, 150, 289 | | 75, 147, 286 |
 
 ## Layout
 
@@ -182,11 +194,15 @@ tests/         test_buffer.cpp, test_config.cpp, test_connection.cpp,
                test_loadgen.py (the load generator against the server)
                protocol.py (Python client for the protocol)
 benchmarks/    loadgen/ (the load generator, C++), run.py (runs a
-               suite), analyze.py (report and plots), benchmark.py
-               (smoke test), README.md (method), RESULTS.md (findings),
-               results/ (raw data of every run)
-docs/          architecture.md, protocol.md, PROGRESS.md
+               suite), analyze.py (report and plots), profile.py
+               (profiles the server with perf), flamegraph.py (draws
+               a flame graph), benchmark.py (smoke test), README.md
+               (method), RESULTS.md (findings of step 9), results/
+               (raw data of every run), profiles/ (every profile)
+docs/          architecture.md, protocol.md, performance.md,
+               PROGRESS.md
 Dockerfile     Linux environment for building and testing
+Dockerfile.profile  the same with perf, for profiling
 ```
 
 What each module is responsible for is listed at the top of
