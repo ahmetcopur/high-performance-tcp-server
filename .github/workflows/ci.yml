@@ -33,3 +33,43 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  # A minute of fuzzing per target on every push. Enough to notice a
+  # change that breaks the decoder or the way a connection puts a stream
+  # together. Longer runs are done by hand, see docs/reliability.md.
+  fuzz:
+    name: ubuntu-latest / fuzz
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake -B build-fuzz -DWARNINGS_AS_ERRORS=ON -DENABLE_FUZZING=ON -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build
+        run: cmake --build build-fuzz --parallel --target fuzz_decode fuzz_stream
+
+      # New inputs go to the first directory, which is thrown away. The
+      # second is the corpus in the repository, which is only read.
+      - name: Fuzz the frame decoder
+        run: |
+          mkdir found-decode
+          build-fuzz/fuzz_decode -max_total_time=60 -max_len=2048 found-decode tests/fuzz/corpus/decode
+
+      - name: Fuzz a connection fed in pieces
+        run: |
+          mkdir found-stream
+          build-fuzz/fuzz_stream -max_total_time=60 -max_len=2048 found-stream tests/fuzz/corpus/stream
+
+      # What made it fail, to be run again at home.
+      - name: Keep the failing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failure
+          path: |
+            crash-*
+            leak-*
+            timeout-*
+            oom-*

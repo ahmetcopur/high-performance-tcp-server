@@ -13,6 +13,20 @@ endif()
 option(WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(ENABLE_ASAN "Build with AddressSanitizer and UBSan" OFF)
 option(ENABLE_TSAN "Build with ThreadSanitizer" OFF)
+option(ENABLE_FUZZING "Build the libFuzzer targets, with ASan and UBSan" OFF)
+
+# The fuzz targets are built with AddressSanitizer and UBSan, because a
+# fuzzer finds far more when a bad read stops the program than when it
+# passes unnoticed.
+if(ENABLE_FUZZING)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR
+            "ENABLE_FUZZING needs clang: libFuzzer is part of it. "
+            "Add -DCMAKE_CXX_COMPILER=clang++.")
+    endif()
+
+    set(ENABLE_ASAN ON)
+endif()
 
 if(ENABLE_ASAN AND ENABLE_TSAN)
     message(FATAL_ERROR
@@ -39,6 +53,13 @@ if(ENABLE_ASAN)
 elseif(ENABLE_TSAN)
     add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
     add_link_options(-fsanitize=thread)
+endif()
+
+# Every file is built so that libFuzzer can see which branches an input
+# takes. The fuzzer itself, with its main(), is linked only into the
+# fuzz targets.
+if(ENABLE_FUZZING)
+    add_compile_options(-fsanitize=fuzzer-no-link)
 endif()
 
 find_package(Threads REQUIRED)
@@ -83,6 +104,22 @@ target_link_libraries(server PRIVATE tcpserver tcpserver_warnings)
 add_executable(loadgen benchmarks/loadgen/loadgen.cpp)
 target_include_directories(loadgen PRIVATE benchmarks/loadgen)
 target_link_libraries(loadgen PRIVATE tcpserver tcpserver_warnings)
+
+# One program per fuzz target. See tests/fuzz/.
+if(ENABLE_FUZZING)
+    foreach(name fuzz_decode fuzz_stream)
+        add_executable(${name} tests/fuzz/${name}.cpp)
+        target_link_libraries(${name} PRIVATE tcpserver tcpserver_warnings)
+        target_link_options(${name} PRIVATE -fsanitize=fuzzer)
+
+        # Apple's current linker refuses the tables a newer clang writes
+        # for the fuzzer ("invalid r_symbolnum"). Its previous linker
+        # takes them. Seen with Homebrew clang 23 and Xcode 16.3.
+        if(APPLE)
+            target_link_options(${name} PRIVATE -Wl,-ld_classic)
+        endif()
+    endforeach()
+endif()
 
 # What this build is, for the benchmark results. A number without its
 # compiler, flags and build type cannot be compared with anything.
