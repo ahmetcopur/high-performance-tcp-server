@@ -1,6 +1,5 @@
 #include "ThreadPool.h"
 
-#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -34,11 +33,9 @@ void ThreadPool::work() {
         {
             std::unique_lock<std::mutex> lock(queueMutex);
 
-            ++sleeping;
             available.wait(lock, [this]() {
                 return stopping || !tasks.empty();
             });
-            --sleeping;
 
             // Only reached empty when stopping. What was queued before
             // the stop is still run.
@@ -72,28 +69,6 @@ void ThreadPool::work() {
 
         completed.fetch_add(1, std::memory_order_relaxed);
     }
-}
-
-void ThreadPool::wakeWorkers() {
-    std::size_t wanted;
-    bool all;
-
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-
-        wanted = std::min(tasks.size(), sleeping);
-        all = wanted == sleeping;
-    }
-
-    // A worker counted as sleeping may have been woken already. Waking
-    // one too many costs a little and loses nothing.
-    if (all) {
-        available.notify_all();
-        return;
-    }
-
-    for (std::size_t i = 0; i < wanted; ++i)
-        available.notify_one();
 }
 
 void ThreadPool::shutdown() {
