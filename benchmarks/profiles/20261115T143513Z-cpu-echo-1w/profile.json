@@ -1,0 +1,143 @@
+{
+ "tool": "cpu",
+ "load": {
+  "name": "echo",
+  "type": "echo",
+  "payload": 64
+ },
+ "workers": 1,
+ "connections": 100,
+ "environment": {
+  "date_utc": "2026-11-15T14:35:22+00:00",
+  "os": "Ubuntu 24.04.5 LTS",
+  "kernel": "Linux 7.0.14-linuxkit",
+  "machine": "aarch64",
+  "cpu": "aarch64",
+  "cores": 8,
+  "power": null,
+  "in_container": true,
+  "python": "3.12.3",
+  "open_files_limit": {
+   "soft": 1048576,
+   "hard": 1048576
+  },
+  "build": {
+   "compiler": "GNU 13.3.0",
+   "compiler_path": "/usr/bin/c++",
+   "cxx_standard": "17",
+   "build_type": "Release",
+   "flags": "-g -fno-omit-frame-pointer -O3 -DNDEBUG",
+   "sanitizer": "none",
+   "system": "Linux 7.0.14-linuxkit",
+   "processor": "aarch64"
+  },
+  "git_commit": "6b31a006e434b05bb6223b3263117ce6b72a1c47",
+  "git_uncommitted_changes": null
+ },
+ "command": "benchmarks/profile.py --build /build --tool cpu --workers 1",
+ "server_command": [
+  "/build/server",
+  "--port",
+  "18090",
+  "--workers",
+  "1",
+  "--idle-timeout-ms",
+  "600000"
+ ],
+ "loadgen_command": [
+  "taskset",
+  "-c",
+  "4-7",
+  "/build/loadgen",
+  "--port",
+  "18090",
+  "--connections",
+  "100",
+  "--threads",
+  "4",
+  "--warmup",
+  "1",
+  "--duration",
+  "7.0",
+  "--type",
+  "echo",
+  "--payload",
+  "64",
+  "--iterations",
+  "0",
+  "--output",
+  "/src/benchmarks/profiles/20261115T143513Z-cpu-echo-1w/loadgen.json"
+ ],
+ "loadgen_throughput_rps": 315674.952,
+ "result": {
+  "frequency_hz": 1999,
+  "seconds": 5.0,
+  "threads": {
+   "event loop": {
+    "samples": 9491,
+    "cores": 0.95,
+    "in_kernel": 0.8397,
+    "by_call": {
+     "send": 6821,
+     "recv": 1204,
+     "the server's own code": 760,
+     "epoll_wait": 324,
+     "malloc and free": 260,
+     "mutex": 88,
+     "clock_gettime": 18,
+     "read (waker)": 16
+    },
+    "own_code_top": {
+     "try_to_wake_up_[k]": 145,
+     "std::string::_M_append(char const*, unsigned long)": 64,
+     "[libc.so.6]": 47,
+     "TcpServer::dispatch(Connection&, time_point)": 46,
+     "Connection::nextRequest(protocol::Frame&)": 46,
+     "EventLoop::run(EventLoop::Handler&)": 34,
+     "std::string::_M_replace(unsigned long, unsigned long, char const*, unsigned long)": 31,
+     "TcpServer::advance(Connection&, time_point)": 28,
+     "TcpServer::onCompletion(Completion&, time_point)": 26,
+     "el0_svc_[k]": 25,
+     "Connection::finishWork(std::basic_string_view<char, std::char_traits<char> >)": 25,
+     "protocol::decodeFrame(std::basic_string_view<char, std::char_traits<char> >, unsigned int)": 22,
+     "EpollPoller::wait(int, std::vector<PollEvent, std::allocator<PollEvent> >&)": 18,
+     "EpollPoller::modify(int, bool, bool)": 18,
+     "std::string::_M_mutate(unsigned long, unsigned long, char const*, unsigned long)": 16
+    }
+   },
+   "worker": {
+    "samples": 1105,
+    "cores": 0.111,
+    "in_kernel": 0.1719,
+    "by_call": {
+     "the server's own code": 378,
+     "clock_gettime": 233,
+     "malloc and free": 182,
+     "mutex": 176,
+     "write (waker)": 71,
+     "pthread_cond_wait (worker goes to sleep)": 65
+    },
+    "own_code_top": {
+     "[libc.so.6]": 57,
+     "el0_svc_[k]": 38,
+     "std::string::_M_append(char const*, unsigned long)": 34,
+     "std::string::reserve(unsigned long)": 32,
+     "protocol::appendU32(std::string&, unsigned int)": 32,
+     "protocol::encodeFrame[abi:cxx11](protocol::Frame const&)": 31,
+     "ThreadPool::work()": 26,
+     "ThreadPool::TaskOf<TcpServer::dispatch(Connection&, time_point)::{lambda()#1}>::run()": 19,
+     "processRequest[abi:cxx11](protocol::Frame, std::atomic<bool> const&)": 14,
+     "__aarch64_ldadd8_relax": 11,
+     "EventLoop::post(Completion)": 11,
+     "operator delete(void*)@plt": 9,
+     "try_to_wake_up_[k]": 7,
+     "free@plt": 7,
+     "std::string::_M_create(unsigned long&, unsigned long)": 6
+    }
+   }
+  },
+  "requests_in_window": 1942347,
+  "window_s": 6.117,
+  "requests_per_s_in_window": 317535
+ }
+}
