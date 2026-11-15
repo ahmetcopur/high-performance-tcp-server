@@ -31,6 +31,8 @@ It passes if, leaving out the first cycles as warm-up,
     asking, and both must hold: the median of the last third is no more
     than 2 MiB or 5 % above the median of the first third, whichever is
     larger, and neither is a straight line fitted through all of them,
+    (not judged in a sanitizer build, which keeps freed memory back on
+    purpose),
   - no well-behaved request failed, timed out or lost its connection,
   - every idle connection was closed by the server, and no other,
   - the server is still running, and stops with exit code 0 when asked,
@@ -240,7 +242,7 @@ def one_cycle(args, directory, number, pid):
     return requests, peak_memory, peak_fds, slept
 
 
-def verdict(samples, warmup, fds_before, exit_code):
+def verdict(samples, warmup, fds_before, exit_code, sanitizer):
     # Returns [(what was checked, passed, detail)].
     judged = samples[warmup:]
     checks = []
@@ -258,13 +260,28 @@ def verdict(samples, warmup, fds_before, exit_code):
     late = statistics.median(memory[-third:])
     fitted = fitted_growth(memory)
     allowed = max(2 * MIB, early * 0.05)
-    checks.append((
-        "memory at the end of the cycles does not grow",
-        late - early <= allowed and fitted <= allowed,
+    detail = (
         f"first third {early / MIB:.2f} MiB, last third {late / MIB:.2f} MiB, "
         f"fitted growth over the run {fitted / MIB:+.2f} MiB, "
-        f"allowed {allowed / MIB:.1f} MiB",
-    ))
+        f"allowed {allowed / MIB:.1f} MiB"
+    )
+
+    # A sanitizer keeps freed memory back on purpose, up to hundreds of
+    # megabytes, so that a later use of it is caught. How fast that
+    # fills up has nothing to do with the server. The figures are still
+    # reported.
+    if sanitizer == "none":
+        checks.append((
+            "memory at the end of the cycles does not grow",
+            late - early <= allowed and fitted <= allowed,
+            detail,
+        ))
+    else:
+        checks.append((
+            f"memory is not judged in a build with the {sanitizer} sanitizer",
+            True,
+            detail,
+        ))
 
     failed = {}
     for s in samples:
@@ -498,7 +515,9 @@ def main():
     with open(log_path) as f:
         log_lines = sum(1 for _ in f)
 
-    checks = verdict(samples, args.warmup_cycles, fds_before, exit_code)
+    environment = run.environment(args.build)
+    checks = verdict(samples, args.warmup_cycles, fds_before, exit_code,
+                     environment["build"]["sanitizer"])
     completed_all = len(samples) == cycles
     passed = completed_all and all(ok for _, ok, _ in checks)
 
@@ -509,7 +528,7 @@ def main():
         "cycle_seconds": args.cycle_seconds,
         "cycles_planned": cycles,
         "warmup_cycles": args.warmup_cycles,
-        "environment": run.environment(args.build),
+        "environment": environment,
         "command": " ".join(["benchmarks/soak.py"] + sys.argv[1:]),
         "server_command": server_command,
         "loads": LOADS,
