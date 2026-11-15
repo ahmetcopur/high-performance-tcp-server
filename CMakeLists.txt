@@ -237,4 +237,20 @@ if(BUILD_TESTING)
         RESOURCE_LOCK tcp_port_18080
         FAIL_REGULAR_EXPRESSION
         "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
+
+    # Half a minute of the soak test, to see that it still runs and that
+    # the server passes it. The real thing takes half an hour and is run
+    # by hand: python3 benchmarks/soak.py --build <dir>
+    add_test(NAME soak_smoke
+        COMMAND Python3::Interpreter
+                ${CMAKE_SOURCE_DIR}/benchmarks/soak.py
+                --build ${CMAKE_BINARY_DIR}
+                --minutes 0.5 --cycle-seconds 5 --warmup-cycles 1
+                --results ${CMAKE_BINARY_DIR}/soak-smoke)
+
+    set_tests_properties(soak_smoke PROPERTIES
+        TIMEOUT 600
+        RESOURCE_LOCK tcp_port_18080
+        FAIL_REGULAR_EXPRESSION
+        "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
 endif()
