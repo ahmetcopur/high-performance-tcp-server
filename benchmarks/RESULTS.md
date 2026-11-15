@@ -35,7 +35,7 @@ machine would give.
 Unless it says otherwise, a cell is echo of 64 bytes over 100
 connections with 4 workers, in a closed loop.
 
-## 1. For cheap requests, the event loop thread is the limit
+## 1. For cheap requests, the workers are not the limit
 
 Echo of 64 bytes reaches about 100,000 to 130,000 requests per second
 and stops there. While it does, the server uses a little over one core
@@ -47,7 +47,13 @@ and its workers are almost idle.
 | Linux, 100 connections | 112,807 | 1.14 cores | 1.4% |
 
 One thread reads, decodes, hands over, collects and writes every
-request. Adding workers cannot help while that thread is full.
+request, and the workers have next to nothing to do.
+
+*Corrected in step 10.* This section first said that the event loop
+thread is full and is therefore the limit. A profile showed that with
+four workers it is on a CPU 71% of the time. It is the limit only with
+one worker. What holds the server back with four is in
+[docs/performance.md](../docs/performance.md).
 
 Reports: [Mac](results/20261115T074842Z-connections-macos-poll/report.md),
 [Linux](results/20261115T081040Z-connections-linux-epoll/report.md).

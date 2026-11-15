@@ -741,9 +741,11 @@ What they show:
 
 - **Heavy compute scales with the cores it has.** Linux stops at four
   workers because the server was pinned to four CPUs.
-- **For cheap requests the event loop thread is the limit**, and more
-  workers make it slower. The server uses 1.1 to 1.4 cores while its
-  workers are 1% to 8% busy.
+- **For cheap requests the workers are not the limit**, and more of
+  them make it slower. The server uses 1.1 to 1.4 cores while its
+  workers are 1% to 8% busy. *Corrected in step 10:* this first said
+  that the event loop thread is the limit. A profile showed it is on a
+  CPU only 71% of the time with four workers.
 - **The likely cost is waking a sleeping worker for each request.** On
   Linux the server's threads give up the CPU 23,323 times a second with
   one worker on echo and 88,725 times with eight, while throughput
