@@ -174,6 +174,16 @@ def os_description():
     return platform.system()
 
 
+def power_source():
+    # A laptop on battery may run slower than on mains.
+    if sys.platform != "darwin":
+        return None
+    out = output_of(["pmset", "-g", "batt"])
+    if not out:
+        return None
+    return out.splitlines()[0].replace("Now drawing from ", "").strip("'")
+
+
 def environment(build_dir):
     with open(os.path.join(build_dir, "build_info.json")) as f:
         build = json.load(f)
@@ -190,6 +200,7 @@ def environment(build_dir):
         "machine": platform.machine(),
         "cpu": cpu_model(),
         "cores": os.cpu_count(),
+        "power": power_source(),
         # Docker on a Mac runs Linux in a virtual machine. Numbers from
         # there are not numbers from a Linux machine.
         "in_container": os.path.exists("/.dockerenv"),
@@ -287,7 +298,8 @@ class Sampler(threading.Thread):
     def stats(self, connection):
         try:
             frame = protocol.request(connection, protocol.STATS, 1)
-            return protocol.parse_stats(frame)
+            # None means the server closed the connection.
+            return protocol.parse_stats(frame) if frame else None
         except (OSError, ValueError, EOFError):
             return None
 
@@ -431,8 +443,10 @@ def run_once(args, cell_config, rate):
         sampler.start()
 
         started = time.time()
+        started_awake = time.monotonic()
         loadgen = subprocess.run(loadgen_command, capture_output=True, text=True)
         finished = time.time()
+        awake = time.monotonic() - started_awake
 
         samples = sampler.stop()
     finally:
@@ -456,17 +470,20 @@ def run_once(args, cell_config, rate):
     measured_to = finished - margin
     measured_from = finished - args.duration + margin
 
-    # If the wall clock says the run took much longer than it should
-    # have, the machine was asleep or stalled, and the numbers are not
-    # to be trusted.
+    # The monotonic clock stops while the machine sleeps and the wall
+    # clock does not. If they disagree, the machine slept during the run
+    # and the numbers describe a sleeping machine. A run that took much
+    # longer than it should have is not to be trusted either.
     expected = args.warmup + args.duration
-    stalled = (finished - started) > expected * 1.5 + 5
+    slept = (finished - started) - awake > 1.0
+    stalled = slept or (finished - started) > expected * 1.5 + 5
 
     return {
         "cell": cell_config["name"],
         "server_command": server_command,
         "loadgen_command": loadgen_command,
         "wall_seconds": round(finished - started, 3),
+        "machine_slept": slept,
         "suspect": stalled,
         "loadgen": result,
         "server": summarize(samples, measured_from, measured_to),
@@ -539,6 +556,7 @@ def main():
         "command": " ".join(sys.argv),
         "cells": cells,
         "skipped_for_open_files_limit": skipped,
+        "discarded_runs": [],
         "finished": False,
     }
 
@@ -562,7 +580,24 @@ def main():
         throughputs = []
 
         for repetition in range(1, args.repetitions + 1):
-            run = run_once(args, cell_config, rate)
+            # A run taken while the machine slept or stalled is thrown
+            # away and done again. After three tries it is kept, marked.
+            for attempt in range(1, 4):
+                run = run_once(args, cell_config, rate)
+
+                if not run["suspect"]:
+                    break
+
+                index["discarded_runs"].append(
+                    {"cell": cell_config["name"], "repetition": repetition}
+                )
+                write_index()
+                print(
+                    f"{cell_config['name']} [{repetition}/{args.repetitions}] "
+                    f"discarded, the machine slept or stalled (try {attempt} of 3)",
+                    flush=True,
+                )
+
             run["repetition"] = repetition
 
             path = os.path.join(
@@ -574,13 +609,15 @@ def main():
 
             result = run["loadgen"]
             throughputs.append(result["throughput_rps"])
-            p99 = result["latency_ns"]["p99"]
+
+            def in_ms(name):
+                value = result["latency_ns"][name]
+                return f"{value / 1e6:8.3f} ms" if value else "     n/a"
 
             print(
                 f"{cell_config['name']} [{repetition}/{args.repetitions}] "
                 f"{result['throughput_rps']:>10.0f} req/s  "
-                f"p50 {result['latency_ns']['p50'] / 1e6:8.3f} ms  "
-                f"p99 {p99 / 1e6 if p99 else float('nan'):8.3f} ms"
+                f"p50 {in_ms('p50')}  p99 {in_ms('p99')}"
                 + ("  CLIENT SATURATED" if result["client"]["saturated"] else "")
                 + ("  SUSPECT" if run["suspect"] else ""),
                 flush=True,

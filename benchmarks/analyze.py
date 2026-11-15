@@ -361,6 +361,9 @@ def report(directory, index, summaries, made):
     add(f"| Machine | {env['cpu']}, {env['cores']} cores, {env['machine']} |")
     add(f"| OS | {env['os']} ({env['kernel']}) |")
 
+    if env.get("power"):
+        add(f"| Power | {env['power']} |")
+
     if env["in_container"]:
         add("| Container | Yes. Linux in a virtual machine, so not what a Linux machine would give. |")
 
@@ -383,6 +386,13 @@ def report(directory, index, summaries, made):
 
     if not index["finished"]:
         add("**This suite did not run to the end.** What follows is what there is.")
+        add("")
+
+    if index.get("discarded_runs"):
+        add(
+            f"{len(index['discarded_runs'])} run(s) were thrown away and done again "
+            "because the machine slept or stalled while they ran."
+        )
         add("")
 
     if index["skipped_for_open_files_limit"]:
