@@ -184,6 +184,13 @@ void TcpServer::onCompletion(Completion& completion, Clock::time_point now) {
 }
 
 int TcpServer::onTimers(Clock::time_point now) {
+    // The loop is about to wait. Requests taken in this turn were queued
+    // without waking anyone, because waking a thread costs more than a
+    // small request does, and a turn can bring dozens of them. Now each
+    // sleeping worker that is needed is woken once. Nothing is lost by
+    // the delay: an answer cannot be sent before the next turn anyway.
+    pool.wakeWorkers();
+
     if (draining && connections.empty()) {
         loop.stop();
         return -1;
@@ -461,8 +468,10 @@ void TcpServer::dispatch(Connection& connection, Clock::time_point now) {
 
         std::uint32_t requestId = request.requestId;
 
+        // Queued without waking a worker. That is done once for the
+        // whole turn of the loop, in onTimers().
         bool accepted =
-            pool.trySubmit([this, fd, id = connection.id(),
+            pool.tryQueue([this, fd, id = connection.id(),
                             request = std::move(request)]() mutable {
                 Completion completion{fd, id, ""};
                 std::uint32_t failedId = request.requestId;

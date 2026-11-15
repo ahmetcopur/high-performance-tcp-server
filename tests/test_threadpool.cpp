@@ -384,3 +384,120 @@ TEST(ThreadPool, ManyProducersAndWorkersLoseNothing) {
     EXPECT_EQ(stats.rejected, refused.load());
     EXPECT_EQ(stats.queueDepth, 0u);
 }
+
+namespace {
+
+// Waits until the pool has run that many tasks. False if it does not
+// get there in five seconds, which means tasks were left lying.
+bool completes(const ThreadPool& pool, std::uint64_t count) {
+    auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+
+    while (pool.stats().completed < count) {
+        if (std::chrono::steady_clock::now() > deadline)
+            return false;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    return true;
+}
+
+} // namespace
+
+TEST(ThreadPool, OneWakeupIsEnoughForManyQueuedTasks) {
+    std::atomic<int> count{0};
+    ThreadPool pool(2, 64);
+
+    // Let the workers fall asleep first.
+    ASSERT_TRUE(pool.trySubmit([]() {
+    }));
+    ASSERT_TRUE(completes(pool, 1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    for (int i = 0; i < 50; ++i)
+        ASSERT_TRUE(pool.tryQueue([&count]() {
+            ++count;
+        }));
+
+    pool.wakeWorkers();
+
+    // No shutdown here to sweep up: the wakeup alone must do it.
+    EXPECT_TRUE(completes(pool, 51));
+    EXPECT_EQ(count, 50);
+}
+
+TEST(ThreadPool, WakingWithNothingQueuedDoesNothing) {
+    ThreadPool pool(2, 4);
+
+    pool.wakeWorkers();
+    pool.wakeWorkers();
+
+    EXPECT_EQ(pool.stats().completed, 0u);
+}
+
+TEST(ThreadPool, QueueingQuietlyIsRefusedAndCountedLikeSubmitting) {
+    Gate gate;
+    ThreadPool pool(1, 1);
+
+    ASSERT_TRUE(pool.trySubmit([&gate]() {
+        gate.wait();
+    }));
+    gate.waitUntilBlocked(1);
+
+    EXPECT_TRUE(pool.tryQueue([]() {
+    }));
+    EXPECT_FALSE(pool.tryQueue([]() {
+    }));
+
+    ThreadPool::Stats stats = pool.stats();
+    EXPECT_EQ(stats.submitted, 2u);
+    EXPECT_EQ(stats.rejected, 1u);
+    EXPECT_EQ(stats.queueDepth, 1u);
+
+    gate.release();
+}
+
+TEST(ThreadPool, QueueingInBatchesWithOneWakeupEachLosesNothing) {
+    const int producers = 4;
+    const int batches = 500;
+    const int perBatch = 8;
+    const int total = producers * batches * perBatch;
+    std::vector<std::atomic<int>> runs(static_cast<std::size_t>(total));
+
+    for (std::atomic<int>& count : runs)
+        count = 0;
+
+    ThreadPool pool(4, 64);
+    std::vector<std::thread> threads;
+
+    for (int p = 0; p < producers; ++p)
+        threads.emplace_back([&pool, &runs, p]() {
+            for (int b = 0; b < batches; ++b) {
+                for (int i = 0; i < perBatch; ++i) {
+                    std::size_t index = static_cast<std::size_t>(
+                        (p * batches + b) * perBatch + i);
+
+                    // A full queue: wake the workers and try again.
+                    while (!pool.tryQueue([&runs, index]() {
+                        ++runs[index];
+                    })) {
+                        pool.wakeWorkers();
+                        std::this_thread::yield();
+                    }
+                }
+
+                pool.wakeWorkers();
+            }
+        });
+
+    for (std::thread& thread : threads)
+        thread.join();
+
+    // Before shutdown, which would wake everyone and hide a wakeup that
+    // was lost.
+    ASSERT_TRUE(completes(pool, static_cast<std::uint64_t>(total)));
+
+    for (const std::atomic<int>& count : runs)
+        ASSERT_EQ(count, 1);
+}

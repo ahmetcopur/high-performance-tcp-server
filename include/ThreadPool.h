@@ -67,6 +67,9 @@ private:
     std::condition_variable available;
     bool stopping = false;
 
+    // Workers waiting on `available`. Changed only with queueMutex held.
+    std::size_t sleeping = 0;
+
     // Changed only with queueMutex held.
     std::uint64_t submitted = 0;
     std::uint64_t rejected = 0;
@@ -88,26 +91,43 @@ public:
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
-    // Hands a task to the workers. Returns false if the queue is full or
-    // the pool is shutting down. In that case the task is left exactly
-    // as it was: nothing has been moved out of it.
+    // Hands a task to the workers and wakes one for it. Returns false
+    // if the queue is full or the pool is shutting down. In that case
+    // the task is left exactly as it was: nothing has been moved out of
+    // it.
     template<typename F> bool trySubmit(F&& function) {
-        {
-            std::lock_guard<std::mutex> lock(queueMutex);
-
-            if (stopping || tasks.size() >= capacity) {
-                ++rejected;
-                return false;
-            }
-
-            tasks.push_back(std::make_unique<TaskOf<std::decay_t<F>>>(
-                std::forward<F>(function)));
-            ++submitted;
-        }
+        if (!tryQueue(std::forward<F>(function)))
+            return false;
 
         available.notify_one();
         return true;
     }
+
+    // Like trySubmit(), but wakes nobody. A worker that is awake finds
+    // the task when it next looks. A worker that is asleep stays asleep
+    // until wakeWorkers(), so a call to that must follow.
+    //
+    // This is for a caller that queues many tasks in a row. Waking a
+    // sleeping thread costs far more than queueing a small task, and one
+    // wakeWorkers() after all of them wakes each worker at most once.
+    template<typename F> bool tryQueue(F&& function) {
+        std::lock_guard<std::mutex> lock(queueMutex);
+
+        if (stopping || tasks.size() >= capacity) {
+            ++rejected;
+            return false;
+        }
+
+        tasks.push_back(std::make_unique<TaskOf<std::decay_t<F>>>(
+            std::forward<F>(function)));
+        ++submitted;
+
+        return true;
+    }
+
+    // Wakes sleeping workers for the tasks that are waiting: one for
+    // each task, as far as there are sleepers.
+    void wakeWorkers();
 
     // Lets the workers finish every task already in the queue, then
     // stops them. Returns when all worker threads have ended. Tasks
