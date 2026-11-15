@@ -127,6 +127,44 @@ container. A sanitizer build takes its options from `CMAKE_OPTIONS`:
 docker run --rm -v "$PWD":/src:ro -e CMAKE_OPTIONS="-DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON" tcpserver-dev
 ```
 
+## Benchmarks
+
+The method, the tools and how to run them are in
+[benchmarks/README.md](benchmarks/README.md). What was measured, with
+the evidence, is in [benchmarks/RESULTS.md](benchmarks/RESULTS.md). The
+raw data of every run is under `benchmarks/results/`, and each report
+there starts with the command that produced it.
+
+```bash
+cmake -B build-release -DCMAKE_BUILD_TYPE=Release
+```
+
+```bash
+cmake --build build-release --parallel
+```
+
+```bash
+python3 benchmarks/run.py --build build-release --suite quick
+```
+
+A few results from 15 November 2026. All of them: Release build of
+commit `dafec02`, client and server on one Apple M1 laptop over
+loopback, median of five runs of five seconds, 100 connections and 4
+workers unless it says otherwise. "Linux" is Ubuntu 24.04 with g++ 13.3
+in Docker's virtual machine on that laptop, server pinned to four CPUs
+and client to four others. "Mac" is macOS 26.6.2 with Apple clang 17,
+nothing pinned. They are not what a server machine would give.
+
+| | Linux, epoll | Mac, `poll()` |
+| --- | ---: | ---: |
+| Echo of 64 bytes, requests/s | 112,807 | 122,046 |
+| The same with 5,000 idle connections beside | 99,747 | 6,085 |
+| Heavy compute with 1, 2, 4 workers, requests/s | 76, 150, 289 | 75, 147, 286 |
+| Echo at a fixed 46,290 requests/s: median, 99th percentile | 49 µs, 124 µs | not reliable |
+
+The second row with the server on `poll()` on Linux is 39,424. Echo is
+fastest with one worker, and RESULTS.md says why.
+
 ## Layout
 
 ```text
@@ -134,18 +172,21 @@ include/       TcpServer.h, EventLoop.h, Poller.h, PollPoller.h,
                EpollPoller.h, Waker.h, TimerQueue.h, Connection.h,
                RequestHandler.h, Buffer.h, FileDescriptor.h,
                ThreadPool.h, Protocol.h, Config.h
-src/           main.cpp and one .cpp per header (Poller is an
-               interface and has none)
+src/           main.cpp and one .cpp per header
 tests/         test_buffer.cpp, test_config.cpp, test_connection.cpp,
-               test_file_descriptor.cpp, test_poller.cpp,
-               test_protocol.cpp, test_request_handler.cpp,
-               test_threadpool.cpp, test_timer_queue.cpp,
-               test_waker.cpp (GoogleTest)
+               test_file_descriptor.cpp, test_histogram.cpp,
+               test_poller.cpp, test_protocol.cpp,
+               test_request_handler.cpp, test_threadpool.cpp,
+               test_timer_queue.cpp, test_waker.cpp (GoogleTest)
                test_server.py (black-box, starts the real server)
+               test_loadgen.py (the load generator against the server)
                protocol.py (Python client for the protocol)
+benchmarks/    loadgen/ (the load generator, C++), run.py (runs a
+               suite), analyze.py (report and plots), benchmark.py
+               (smoke test), README.md (method), RESULTS.md (findings),
+               results/ (raw data of every run)
 docs/          architecture.md, protocol.md, PROGRESS.md
 Dockerfile     Linux environment for building and testing
-benchmark.py   quick load script, not a rigorous benchmark
 ```
 
 What each module is responsible for is listed at the top of

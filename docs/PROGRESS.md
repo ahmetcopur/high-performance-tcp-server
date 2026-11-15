@@ -15,7 +15,7 @@ comparable.
 - [x] 6. Refactor into modules
 - [x] 7. Linux epoll backend
 - [x] 8. Thread pool engineering
-- [ ] 9. Rebuild the benchmark suite
+- [x] 9. Rebuild the benchmark suite
 - [ ] 10. Profiling, then optimization
 - [ ] 11. Reliability and fault injection
 - [ ] 12. Polish
@@ -29,7 +29,9 @@ comparable.
 - **Linux VM:** Ubuntu 22.04, g++ 11.4, 4 cores. Used before this
   repository existed.
 - **Linux container:** Ubuntu 24.04 in Docker on the Mac (aarch64),
-  g++ 13.3.0, CMake 3.28.3, Python 3.12.3. Used for Linux-only checks.
+  g++ 13.3.0, CMake 3.28.3, Python 3.12.3. Used for Linux-only checks
+  and, since step 9, for the Linux benchmarks. It runs in a virtual
+  machine with 8 CPUs, kernel 7.0.14-linuxkit.
 - **CI, `ubuntu-latest`:** GitHub-hosted Ubuntu 26.04, g++ 15.2.0.
 - **CI, `macos-latest`:** GitHub-hosted macOS 26 on arm64, Apple clang
   21.0.0.
@@ -646,6 +648,206 @@ Not verified:
 - Whether one allocation per task matters. Nothing was measured.
 - The pool under real load. The stress test is a unit test.
 
+## Step 9: benchmark suite (2026-11-15)
+
+What changed: the old `benchmark.py` measured a Python client more than
+the server. There is now a load generator in C++
+(`benchmarks/loadgen/`), a runner that drives it through named suites
+and keeps every run (`benchmarks/run.py`), and a report generator
+(`benchmarks/analyze.py`). `benchmark.py` moved to `benchmarks/` and is
+a smoke test. The method is in
+[benchmarks/README.md](../benchmarks/README.md), the findings in
+[benchmarks/RESULTS.md](../benchmarks/RESULTS.md), and the raw data in
+`benchmarks/results/`.
+
+The load generator runs N connections over T threads, each thread with
+its own poller. It makes every connection before it sends anything,
+throws a warm-up away, and counts bytes at the socket. Closed loop sends
+the next request when the answer arrives. Open loop (`--rate`) keeps a
+schedule and counts latency from when a request was due. It reports how
+every request ended (completed, busy, error, timeout, connection lost,
+unfinished, never sent), a full latency histogram, and its own CPU use
+and how well it kept its schedule.
+
+The runner starts a fresh server for every repetition, five per cell,
+and samples the server four times a second: CPU time, memory, on Linux
+context switches and open files, and queue depth and worker time from
+STATS. Every result set records machine, OS, kernel, compiler, flags,
+build type, commit, power source and its own command line.
+
+Decisions:
+
+- **The histogram is written here, not taken from a library.**
+  Logarithmic buckets, 128 to each power of two, so a value is kept to
+  within 0.8% of itself. About 180 lines, with tests.
+- **A percentile needs ten samples above it** or it is left out. The
+  99.9th percentile of 500 requests is one request.
+- **A percentile is the top of its bucket**, so it never understates.
+- **The open-loop client spins for the last millisecond before a
+  request is due.** Sleeping in `poll()` is not precise enough. So in an
+  open loop the client's CPU use says nothing, and a run is judged by
+  how late requests were sent: flagged when over 1% went out more than a
+  millisecond late.
+- **A closed-loop run is flagged when the client's threads are 85% busy
+  or more.**
+- **The latency suite uses two client threads, not four.** With four,
+  the client on the Mac ran up to 110 ms behind its schedule. Both sets
+  of results are kept.
+- **The client always waits the best way the platform has.** The
+  runner's `--poller` is for the server only. Passing it to both, as the
+  first version did, slowed both and measured neither.
+- **The load generator closes its connections with a reset.** Closing
+  thousands of connections normally leaves each port unusable for a
+  while, and the next run could not connect.
+- **The plots are SVG written by hand.** matplotlib is not installed,
+  and the report generator should run anywhere Python does.
+- **The poller factory moved into the library**, so the load generator
+  uses the same `Poller` as the server.
+- **The runner refuses anything but a Release build** unless told
+  otherwise, and checks for a sleeping machine by comparing the wall
+  clock with a clock that stops during sleep. A run taken while the
+  machine slept is redone, up to three times.
+- **Raw results are committed**, 7.3 MB for 15 result sets. The brief
+  asks for evidence to be kept.
+
+Results. Every figure is the median of five runs of five seconds after
+two of warm-up, Release build of commit `dafec02`, client and server on
+the same Apple M1 over loopback, 100 connections and 4 workers unless it
+says otherwise. "Linux" is the container, g++ 13.3.0, server pinned to
+CPUs 0 to 3 and client to 4 to 7. "Mac" is macOS 26.6.2, Apple clang 17,
+nothing pinned, on battery. RESULTS.md has all of them with links to the
+reports.
+
+| | Linux, epoll | Mac, `poll()` |
+| --- | ---: | ---: |
+| Echo 64 B, requests/s | 112,807 | 122,046 |
+| Echo 64 KiB, requests/s | 14,774 | 30,491 |
+| Echo 64 B with 5,000 idle connections | 99,747 | 6,085 |
+| Light compute | 160,595 | 110,779 |
+| Heavy compute | 289 | 286 |
+
+The worker-scaling experiment, requests per second:
+
+| | 1 worker | 2 | 4 | 8 |
+| --- | ---: | ---: | ---: | ---: |
+| Linux, echo | 213,639 | 128,064 | 99,541 | 102,193 |
+| Linux, light compute | 103,264 | 213,497 | 161,972 | 138,541 |
+| Linux, heavy compute | 76 | 150 | 289 | 289 |
+| Mac, echo | 130,807 | 118,626 | 106,829 | 95,912 |
+| Mac, light compute | 88,232 | 119,499 | 96,297 | 94,398 |
+| Mac, heavy compute | 75 | 147 | 286 | 441 |
+
+What they show:
+
+- **Heavy compute scales with the cores it has.** Linux stops at four
+  workers because the server was pinned to four CPUs.
+- **For cheap requests the event loop thread is the limit**, and more
+  workers make it slower. The server uses 1.1 to 1.4 cores while its
+  workers are 1% to 8% busy.
+- **The likely cost is waking a sleeping worker for each request.** On
+  Linux the server's threads give up the CPU 23,323 times a second with
+  one worker on echo and 88,725 times with eight, while throughput
+  halves. With two workers on light compute, both 96% busy, it is 2,166
+  times and the throughput is the best measured. This is read from
+  counters, not profiled. It is where step 10 starts.
+- **Idle connections cost `poll()` and not epoll.** With 5,000 idle
+  connections the server on Linux does 99,747 with epoll and 39,424
+  with `poll()`. With every connection busy the two are level.
+- **A closed loop's latency is its queue.** At 100 connections the
+  median is 1.06 ms, which is 100 divided by the throughput. At half the
+  load in an open loop it is 49 µs, with a 99th percentile of 124 µs
+  (Linux, two client threads).
+
+New tests: `test_histogram.cpp`, 12 GoogleTest cases. `test_loadgen.py`,
+12 tests that run the load generator against the real server, registered
+with CTest as `loadgen`: byte counts against the frame size, the
+histogram holding every sample, percentiles left out, the rate kept in
+an open loop, busy answers and timeouts counted apart, connections that
+could not be made, and one that shows coordinated omission: a server
+asked for four times what it can do gives the same throughput in both
+modes, while the open loop's median latency is more than five times the
+closed loop's.
+
+Verified on the Mac, warnings as errors, no warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| RelWithDebInfo | Apple clang 17 | 160 of 160 tests pass |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 160 of 160 |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 160 of 160 |
+
+The 160 are 158 GoogleTest cases, `integration_poll` and `loadgen`.
+
+Verified in the Linux container (Ubuntu 24.04, g++ 13.3.0), integration
+suite on both pollers:
+
+| Configuration | Result |
+| --- | --- |
+| RelWithDebInfo | 178 of 178 |
+| Debug, `ENABLE_ASAN` | 178 of 178 |
+| Debug, `ENABLE_TSAN` | 178 of 178 |
+
+The first ASan run on the Mac failed one new test, the one that shows
+coordinated omission. Its request was sized for an optimized build.
+Under ASan the server completed fewer than twenty in two seconds, too
+few for a median, and the test compared medians. The request is now a
+twentieth of the size and the test compares means. Measured afterwards,
+the open loop's mean is 210, 90 and 44 times the closed loop's in the
+RelWithDebInfo, ASan and TSan builds, where the test asks for 5. The
+test then passed three times in a row in each of the three builds.
+
+The first CI run, 43698651809 on commit `0a4a13d`, passed in five jobs
+and failed in one, macOS TSan, in another new test. The open-loop test
+asked for 1000 requests a second, give or take 30, and got 963. Each
+client thread spins for the last millisecond before a request is due.
+At 500 a second per thread that is half its time, beside a TSan server
+on a machine with three cores. The test now asks for 200 a second and
+allows a tenth either way, which still catches a rate that is wrong by a
+factor. The failure was not reproduced: the old test passed five times
+on the Mac under TSan with eight busy loops beside it, and six times in
+the Linux container under TSan on two CPUs.
+
+The smoke test, `benchmarks/benchmark.py`, against the Release build on
+the Mac: 50 clients, every response correct, byte counts as expected.
+
+The benchmarks themselves: 15 result sets, 410 runs, none discarded for
+a sleeping machine and none marked suspect. Every figure in RESULTS.md
+was recomputed from the raw run files after it was written. That found
+four statements the data did not support, which were corrected, and a
+report line that gave the wrong number of client threads, which was
+fixed in `analyze.py`.
+
+Verified in CI, GitHub Actions run 43699662842 on commit `7213aed`: all
+six jobs pass, no warnings. The Ubuntu jobs run 178 tests, the macOS
+jobs 160. CI runs the tests of the load generator. It does not run the
+benchmarks.
+
+Thrown away, and why:
+
+- The first full run on the Mac. The lid was closed two minutes in and
+  the machine slept through it. That is what led to the sleep check.
+- Two Linux result sets taken with `--poller poll` on both sides.
+
+Not verified:
+
+- **Anything on a real Linux machine or over a network.** The Linux
+  numbers are from a virtual machine on a laptop.
+- **Why waking workers costs what it seems to.** Counters fit the
+  explanation. Nothing was profiled, and the Mac has no such counters.
+- **Open-loop latency on the Mac above 25% of capacity.** The client
+  could not keep its schedule there.
+- **The load generator against another tool.** Its byte counts and
+  request counts are tested against the protocol's frame sizes, and its
+  rate against the clock. Its latencies have nothing independent to be
+  compared with.
+- **What sampling costs the server.** A STATS request four times a
+  second, taken to be nothing.
+- **The power source for the Linux runs.** The container cannot see it.
+  The Mac was on battery before them and on mains after.
+- **Edge-triggered epoll.** Still not written, so not measured.
+- **Runs longer than five seconds.** Nothing here would show a slow
+  leak or a pause that comes once a minute. Step 11 has the soak test.
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -722,3 +924,29 @@ Not verified:
     error frame per request.** Nothing slows such a client down.
 24. **`--stats-interval-ms` wakes the loop on every interval** even
     when nothing else is happening.
+25. **A cheap request pays for waking a worker.** Echo on Linux does
+    213,639 requests a second with one worker and 99,541 with four.
+    Every request goes to the pool, even one that costs less than the
+    hand-over. Measured in step 9, for step 10.
+26. **No benchmark has run on Linux hardware.** Client and server share
+    a laptop, and Linux runs in a virtual machine on it.
+27. **On the Mac the load generator is the limit at thousands of
+    connections**, because it waits with `poll()` too, and it cannot
+    keep an open-loop schedule above a quarter of capacity because
+    nothing can be pinned. Those cells are flagged in the reports.
+28. **With the defaults, 10,000 busy connections overflow the queue.**
+    `--max-connections` is 10,000 and `--queue-capacity` 1,024. In six
+    of the fifteen runs at 10,000 connections some requests, 379 to
+    2,246 of about 500,000, were answered "server busy".
+29. **5,000 connections measured lower than 10,000 on Linux**, 85,693
+    against 112,420 with epoll, and the same with `poll()`. Not
+    explained.
+30. **A report says "plus uncommitted changes" without saying which**,
+    and in the container it cannot tell at all, because the image has
+    no git.
+31. **Three tests of the load generator depend on the machine's
+    speed.** The rate kept in an open loop, the coordinated-omission
+    comparison and the busy count each need the server to do a certain
+    amount in a second or two. Two of them failed once in a sanitizer
+    build in step 9 and were given more room. They can fail again on a
+    machine that is slow enough.
