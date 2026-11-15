@@ -1,0 +1,106 @@
+{
+ "tool": "heap",
+ "load": {
+  "name": "echo",
+  "type": "echo",
+  "payload": 64
+ },
+ "workers": 4,
+ "connections": 100,
+ "environment": {
+  "date_utc": "2026-11-15T09:53:15+00:00",
+  "os": "Ubuntu 24.04.5 LTS",
+  "kernel": "Linux 7.0.14-linuxkit",
+  "machine": "aarch64",
+  "cpu": "aarch64",
+  "cores": 8,
+  "power": null,
+  "in_container": true,
+  "python": "3.12.3",
+  "open_files_limit": {
+   "soft": 1048576,
+   "hard": 1048576
+  },
+  "build": {
+   "compiler": "GNU 13.3.0",
+   "compiler_path": "/usr/bin/c++",
+   "cxx_standard": "17",
+   "build_type": "Release",
+   "flags": "-g -fno-omit-frame-pointer -O3 -DNDEBUG",
+   "sanitizer": "none",
+   "system": "Linux 7.0.14-linuxkit",
+   "processor": "aarch64"
+  },
+  "git_commit": "44216413101f88c00ce30b115a2fb393f47eeb73",
+  "git_uncommitted_changes": null
+ },
+ "command": "benchmarks/profile.py --build /build --tool heap --seconds 2",
+ "server_command": [
+  "/build/server",
+  "--port",
+  "18090",
+  "--workers",
+  "4",
+  "--idle-timeout-ms",
+  "600000"
+ ],
+ "loadgen_command": [
+  "taskset",
+  "-c",
+  "4-7",
+  "/build/loadgen",
+  "--port",
+  "18090",
+  "--connections",
+  "100",
+  "--threads",
+  "4",
+  "--warmup",
+  "1",
+  "--duration",
+  "4.0",
+  "--type",
+  "echo",
+  "--payload",
+  "64",
+  "--iterations",
+  "0",
+  "--output",
+  "/src/benchmarks/profiles/20261115T095257Z-heap-echo-4w/loadgen.json"
+ ],
+ "loadgen_throughput_rps": 82059.881,
+ "result": {
+  "allocations": 381554,
+  "stacks_recorded": 375963,
+  "share_by_site": {
+   "event loop: TcpServer::advance(Connection&, time_point) <- EventLoop::run(EventLoop::Handler&)": 0.3216,
+   "worker: protocol::encodeFrame[abi:cxx11](protocol::Frame const&) <- processRequest[abi:cxx11](protocol::Frame, std::atomic<bool> const&)": 0.3167,
+   "event loop: protocol::decodeFrame(std::basic_string_view<char, std::char_traits<char> >, unsigned int) <- Connection::nextRequest(protocol::Frame&)": 0.3167,
+   "worker: EventLoop::post(Completion) <- ThreadPool::TaskOf<TcpServer::advance(Connection&, time_point)::{lambda()#1}>::run()": 0.032,
+   "event loop: std::_Deque_base<Completion, std::allocator<Completion> >::_M_initialize_map(unsigned long) [clone .constprop.0] <- EventLoop::run(EventLoop::Handler&)": 0.013,
+   "event loop: std::__detail::_Map_base<int, std::pair<int const, unsigned int>, std::allocator<std::pair<int const, unsigned int> >, std::__detail::_Select1st, std::equal_to<int>, std::hash<int>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, false, true>, true>::operator[](int const&) <- EpollPoller::add(int, bool, bool)": 0.0,
+   "event loop: TcpServer::acceptConnections(time_point) <- EventLoop::run(EventLoop::Handler&)": 0.0,
+   "event loop: TimerQueue::arm(int, unsigned long, time_point) <- TcpServer::acceptConnections(time_point)": 0.0,
+   "event loop: protocol::encodeStats[abi:cxx11](protocol::ServerStats const&) <- TcpServer::advance(Connection&, time_point)": 0.0,
+   "event loop: protocol::encodeFrame[abi:cxx11](protocol::Frame const&) <- TcpServer::advance(Connection&, time_point)": 0.0,
+   "event loop: Connection::respond(std::basic_string_view<char, std::char_traits<char> >) <- TcpServer::advance(Connection&, time_point)": 0.0
+  },
+  "requests_in_window": 122508,
+  "window_s": 2.019,
+  "requests_per_s_in_window": 60691,
+  "allocations_per_request": 3.11,
+  "by_site_per_request": {
+   "event loop: TcpServer::advance(Connection&, time_point) <- EventLoop::run(EventLoop::Handler&)": 1.002,
+   "worker: protocol::encodeFrame[abi:cxx11](protocol::Frame const&) <- processRequest[abi:cxx11](protocol::Frame, std::atomic<bool> const&)": 0.986,
+   "event loop: protocol::decodeFrame(std::basic_string_view<char, std::char_traits<char> >, unsigned int) <- Connection::nextRequest(protocol::Frame&)": 0.986,
+   "worker: EventLoop::post(Completion) <- ThreadPool::TaskOf<TcpServer::advance(Connection&, time_point)::{lambda()#1}>::run()": 0.1,
+   "event loop: std::_Deque_base<Completion, std::allocator<Completion> >::_M_initialize_map(unsigned long) [clone .constprop.0] <- EventLoop::run(EventLoop::Handler&)": 0.04,
+   "event loop: std::__detail::_Map_base<int, std::pair<int const, unsigned int>, std::allocator<std::pair<int const, unsigned int> >, std::__detail::_Select1st, std::equal_to<int>, std::hash<int>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, false, true>, true>::operator[](int const&) <- EpollPoller::add(int, bool, bool)": 0.0,
+   "event loop: TcpServer::acceptConnections(time_point) <- EventLoop::run(EventLoop::Handler&)": 0.0,
+   "event loop: TimerQueue::arm(int, unsigned long, time_point) <- TcpServer::acceptConnections(time_point)": 0.0,
+   "event loop: protocol::encodeStats[abi:cxx11](protocol::ServerStats const&) <- TcpServer::advance(Connection&, time_point)": 0.0,
+   "event loop: protocol::encodeFrame[abi:cxx11](protocol::Frame const&) <- TcpServer::advance(Connection&, time_point)": 0.0,
+   "event loop: Connection::respond(std::basic_string_view<char, std::char_traits<char> >) <- TcpServer::advance(Connection&, time_point)": 0.0
+  }
+ }
+}

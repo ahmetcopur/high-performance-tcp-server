@@ -1,0 +1,104 @@
+{
+ "tool": "syscalls",
+ "load": {
+  "name": "echo",
+  "type": "echo",
+  "payload": 64
+ },
+ "workers": 4,
+ "connections": 100,
+ "environment": {
+  "date_utc": "2026-11-15T09:52:41+00:00",
+  "os": "Ubuntu 24.04.5 LTS",
+  "kernel": "Linux 7.0.14-linuxkit",
+  "machine": "aarch64",
+  "cpu": "aarch64",
+  "cores": 8,
+  "power": null,
+  "in_container": true,
+  "python": "3.12.3",
+  "open_files_limit": {
+   "soft": 1048576,
+   "hard": 1048576
+  },
+  "build": {
+   "compiler": "GNU 13.3.0",
+   "compiler_path": "/usr/bin/c++",
+   "cxx_standard": "17",
+   "build_type": "Release",
+   "flags": "-g -fno-omit-frame-pointer -O3 -DNDEBUG",
+   "sanitizer": "none",
+   "system": "Linux 7.0.14-linuxkit",
+   "processor": "aarch64"
+  },
+  "git_commit": "44216413101f88c00ce30b115a2fb393f47eeb73",
+  "git_uncommitted_changes": null
+ },
+ "command": "benchmarks/profile.py --build /build --tool syscalls",
+ "server_command": [
+  "/build/server",
+  "--port",
+  "18090",
+  "--workers",
+  "4",
+  "--idle-timeout-ms",
+  "600000"
+ ],
+ "loadgen_command": [
+  "taskset",
+  "-c",
+  "4-7",
+  "/build/loadgen",
+  "--port",
+  "18090",
+  "--connections",
+  "100",
+  "--threads",
+  "4",
+  "--warmup",
+  "1",
+  "--duration",
+  "7.0",
+  "--type",
+  "echo",
+  "--payload",
+  "64",
+  "--iterations",
+  "0",
+  "--output",
+  "/src/benchmarks/profiles/20261115T095233Z-syscalls-echo-4w/loadgen.json"
+ ],
+ "loadgen_throughput_rps": 110906.545,
+ "result": {
+  "calls": {
+   "epoll_ctl": 1088040,
+   "recvfrom": 1087960,
+   "futex": 962766,
+   "sendto": 544016,
+   "epoll_pwait": 11392,
+   "write": 11300,
+   "read": 7346,
+   "accept": 0,
+   "close": 0,
+   "shutdown": 0,
+   "other": -174
+  },
+  "requests_in_window": 553730,
+  "window_s": 5.09,
+  "requests_per_s_in_window": 108796,
+  "calls_per_request": {
+   "epoll_ctl": 1.965,
+   "recvfrom": 1.965,
+   "futex": 1.739,
+   "sendto": 0.982,
+   "epoll_pwait": 0.021,
+   "write": 0.02,
+   "read": 0.013,
+   "accept": 0.0,
+   "close": 0.0,
+   "shutdown": 0.0,
+   "other": -0.0
+  },
+  "total_per_request": 6.7
+ }
+}

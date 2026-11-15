@@ -1,0 +1,146 @@
+{
+ "tool": "cpu",
+ "load": {
+  "name": "light",
+  "type": "compute",
+  "iterations": 100,
+  "payload": 64
+ },
+ "workers": 4,
+ "connections": 100,
+ "environment": {
+  "date_utc": "2026-11-15T09:52:33+00:00",
+  "os": "Ubuntu 24.04.5 LTS",
+  "kernel": "Linux 7.0.14-linuxkit",
+  "machine": "aarch64",
+  "cpu": "aarch64",
+  "cores": 8,
+  "power": null,
+  "in_container": true,
+  "python": "3.12.3",
+  "open_files_limit": {
+   "soft": 1048576,
+   "hard": 1048576
+  },
+  "build": {
+   "compiler": "GNU 13.3.0",
+   "compiler_path": "/usr/bin/c++",
+   "cxx_standard": "17",
+   "build_type": "Release",
+   "flags": "-g -fno-omit-frame-pointer -O3 -DNDEBUG",
+   "sanitizer": "none",
+   "system": "Linux 7.0.14-linuxkit",
+   "processor": "aarch64"
+  },
+  "git_commit": "44216413101f88c00ce30b115a2fb393f47eeb73",
+  "git_uncommitted_changes": null
+ },
+ "command": "benchmarks/profile.py --build /build --tool cpu --load light",
+ "server_command": [
+  "/build/server",
+  "--port",
+  "18090",
+  "--workers",
+  "4",
+  "--idle-timeout-ms",
+  "600000"
+ ],
+ "loadgen_command": [
+  "taskset",
+  "-c",
+  "4-7",
+  "/build/loadgen",
+  "--port",
+  "18090",
+  "--connections",
+  "100",
+  "--threads",
+  "4",
+  "--warmup",
+  "1",
+  "--duration",
+  "7.0",
+  "--type",
+  "compute",
+  "--payload",
+  "64",
+  "--iterations",
+  "100",
+  "--output",
+  "/src/benchmarks/profiles/20261115T095223Z-cpu-light-4w/loadgen.json"
+ ],
+ "loadgen_throughput_rps": 182537.618,
+ "result": {
+  "frequency_hz": 1999,
+  "seconds": 5.0,
+  "threads": {
+   "event loop": {
+    "samples": 9225,
+    "cores": 0.923,
+    "in_kernel": 0.8241,
+    "by_call": {
+     "send": 4791,
+     "epoll_ctl": 1467,
+     "recv": 1405,
+     "pthread_cond_signal (wake a worker)": 571,
+     "the server's own code": 481,
+     "epoll_wait": 266,
+     "malloc and free": 117,
+     "mutex": 77,
+     "read (waker)": 37,
+     "clock_gettime": 13
+    },
+    "own_code_top": {
+     "TcpServer::advance(Connection&, time_point)": 56,
+     "TcpServer::onSocketEvent(PollEvent const&, time_point)": 45,
+     "std::string::_M_append(char const*, unsigned long)": 40,
+     "Connection::nextRequest(protocol::Frame&)": 39,
+     "EpollPoller::modify(int, bool, bool)": 29,
+     "[libc.so.6]": 24,
+     "__errno_location": 20,
+     "EventLoop::run(EventLoop::Handler&)": 18,
+     "protocol::decodeFrame(std::basic_string_view<char, std::char_traits<char> >, unsigned int)": 17,
+     "std::string::_M_replace(unsigned long, unsigned long, char const*, unsigned long)": 17,
+     "EpollPoller::wait(int, std::vector<PollEvent, std::allocator<PollEvent> >&)": 16,
+     "std::condition_variable::notify_one()": 15,
+     "el0_svc_[k]": 11,
+     "Connection::finished() const": 11,
+     "Connection::wantsRead() const": 10
+    }
+   },
+   "worker": {
+    "samples": 19244,
+    "cores": 1.925,
+    "in_kernel": 0.0303,
+    "by_call": {
+     "the server's own code": 18006,
+     "pthread_cond_wait (worker goes to sleep)": 472,
+     "clock_gettime": 319,
+     "malloc and free": 240,
+     "mutex": 130,
+     "write (waker)": 77
+    },
+    "own_code_top": {
+     "protocol::computeHash(std::basic_string_view<char, std::char_traits<char> >, unsigned int, std::atomic<bool> const*)": 17359,
+     "protocol::appendU32(std::string&, unsigned int)": 103,
+     "[libc.so.6]": 80,
+     "protocol::encodeFrame[abi:cxx11](protocol::Frame const&)": 70,
+     "el0_svc_[k]": 41,
+     "try_to_wake_up_[k]": 37,
+     "processRequest[abi:cxx11](protocol::Frame, std::atomic<bool> const&)": 36,
+     "ThreadPool::work()": 35,
+     "_raw_spin_unlock_irqrestore_[k]": 27,
+     "EventLoop::post(Completion)": 26,
+     "ThreadPool::TaskOf<TcpServer::advance(Connection&, time_point)::{lambda()#1}>::run()": 25,
+     "std::string::_M_append(char const*, unsigned long)": 20,
+     "__futex_hash_[k]": 14,
+     "std::string::reserve(unsigned long)": 14,
+     "__aarch64_ldadd8_relax": 13
+    }
+   }
+  },
+  "requests_in_window": 1110355,
+  "window_s": 6.102,
+  "requests_per_s_in_window": 181965
+ }
+}

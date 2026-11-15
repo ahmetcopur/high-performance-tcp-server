@@ -1,0 +1,13 @@
+# started on Sun Nov 15 09:52:43 2026
+
+5951613,,raw_syscalls:sys_enter,5656055621,100.00,,
+23073,,syscalls:sys_enter_epoll_pwait,5656061788,100.00,,
+2162730,,syscalls:sys_enter_recvfrom,5656080497,100.00,,
+1081409,,syscalls:sys_enter_sendto,5656084205,100.00,,
+2162843,,syscalls:sys_enter_epoll_ctl,5656127164,100.00,,
+483456,,syscalls:sys_enter_futex,5656150164,100.00,,
+22875,,syscalls:sys_enter_write,5656127705,100.00,,
+15259,,syscalls:sys_enter_read,5656121289,100.00,,
+0,,syscalls:sys_enter_accept,5656095372,100.00,,
+0,,syscalls:sys_enter_close,5656080538,100.00,,
+0,,syscalls:sys_enter_shutdown,5656095872,100.00,,
