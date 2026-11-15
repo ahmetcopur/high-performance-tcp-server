@@ -170,6 +170,12 @@ public:
 
     bool wantsWrite() const;
 
+    // Output passed the high watermark and has not drained to the low
+    // one yet. Nothing is decoded while this holds.
+    bool heldBack() const {
+        return throttled;
+    }
+
     // Works out the current phase and how long it may still last.
     // Returns the milliseconds left, 0 if the time is up, or -1 if the
     // phase has no limit.

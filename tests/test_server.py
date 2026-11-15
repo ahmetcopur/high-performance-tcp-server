@@ -1386,6 +1386,37 @@ class SlowReaderTest(ServerTestCase):
         slow.close()
 
 
+class HeldBackRequestsTest(ServerTestCase):
+    # A low watermark for output, far below what a socket buffer holds.
+    HIGH_WATER = 16 * 1024
+    OPTIONS = ("--workers", "4", "--output-high-water", str(HIGH_WATER))
+
+    def test_requests_held_back_by_full_output_go_on_once_it_is_sent(self):
+        # Requests the server answers itself, so many in one piece that
+        # their answers pass the high watermark while later requests are
+        # still waiting in the input. The server holds those back. The
+        # socket then takes all the answers at once, and the server must
+        # take the waiting requests up again by itself: the client has
+        # sent everything, and nothing more will arrive to remind it.
+        count = 30000
+        requests = b"".join(protocol.encode(STATS, i) for i in range(count))
+
+        s = connect()
+        s.settimeout(20)
+
+        # Reading while sending, so that the socket always has room.
+        sender = threading.Thread(target=s.sendall, args=(requests,))
+        sender.start()
+
+        for i in range(count):
+            msg_type, request_id, _ = protocol.recv_frame(s)
+            self.assertEqual((msg_type, request_id), (STATS | RESPONSE, i))
+
+        sender.join()
+        self.assert_echo(s, b"still here")
+        s.close()
+
+
 class ConnectionLimitTest(ServerTestCase):
     LIMIT = 5
     OPTIONS = ("--workers", "4", "--max-connections", str(LIMIT))

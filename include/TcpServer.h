@@ -74,9 +74,14 @@ private:
     void acceptConnections(Clock::time_point now);
 
     // Serves what the connection has received, as far as it can go now,
-    // then closes the connection if that was the last thing it needed.
-    // Call it after anything has happened to a connection.
+    // sends what it is owed, then closes the connection if that was the
+    // last thing it needed. Call it after anything has happened to a
+    // connection.
     void advance(Connection& connection, Clock::time_point now);
+
+    // The part of advance() that takes requests off the connection:
+    // answers the cheap ones here and hands the others to the workers.
+    void dispatch(Connection& connection, Clock::time_point now);
 
     // Tells the poller what the connection is waiting for and the timer
     // queue how long it may wait. Whenever a connection changes, this is

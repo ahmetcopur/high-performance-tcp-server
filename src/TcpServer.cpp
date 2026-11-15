@@ -389,6 +389,47 @@ void TcpServer::acceptConnections(Clock::time_point now) {
 }
 
 void TcpServer::advance(Connection& connection, Clock::time_point now) {
+    int fd = connection.fd();
+
+    while (true) {
+        dispatch(connection, now);
+
+        if (!connection.wantsWrite())
+            break;
+
+        // Send at once. The socket nearly always has room, and asking the
+        // poller first costs two epoll_ctl calls and a turn of the loop
+        // for every response. The poller is asked only when the socket
+        // does not take everything.
+        bool wasHeldBack = connection.heldBack();
+
+        if (!connection.flush(now)) {
+            closeConnection(fd);
+            return;
+        }
+
+        // Sending made room, so requests that were held back by the full
+        // output can be decoded now. Nothing else would bring them up
+        // again: the client may have sent all it is going to send.
+        if (!wasHeldBack || connection.heldBack())
+            break;
+    }
+
+    // In Closing, once the last response has gone out: send FIN and keep
+    // the socket open for reading, so that bytes the peer is still
+    // sending do not turn the close into a reset that could destroy what
+    // was just sent.
+    connection.sendFinIfDue();
+
+    if (connection.finished()) {
+        closeConnection(fd);
+        return;
+    }
+
+    settle(connection, now);
+}
+
+void TcpServer::dispatch(Connection& connection, Clock::time_point now) {
     using namespace protocol;
 
     int fd = connection.fd();
@@ -450,19 +491,6 @@ void TcpServer::advance(Connection& connection, Clock::time_point now) {
         connection.respond(encodeError(requestId, ErrorCode::ServerBusy,
                                        errorName(ErrorCode::ServerBusy)));
     }
-
-    // In Closing, once the last response has gone out: send FIN and keep
-    // the socket open for reading, so that bytes the peer is still
-    // sending do not turn the close into a reset that could destroy what
-    // was just sent.
-    connection.sendFinIfDue();
-
-    if (connection.finished()) {
-        closeConnection(fd);
-        return;
-    }
-
-    settle(connection, now);
 }
 
 protocol::ServerStats TcpServer::currentStats(Clock::time_point now) const {
