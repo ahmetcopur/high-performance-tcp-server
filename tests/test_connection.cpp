@@ -101,6 +101,14 @@ protected:
         ASSERT_TRUE(connection->receive());
     }
 
+    // Bytes and the peer's FIN are both waiting. The bytes are taken by
+    // one call and the FIN is found by the next, as in the server, where
+    // the poller reports the socket a second time.
+    void receiveBytesThenFin() {
+        ASSERT_TRUE(connection->receive());
+        ASSERT_TRUE(connection->receive());
+    }
+
     // The next request, or 0 if there is none.
     std::uint32_t nextRequestId() {
         Frame request;
@@ -284,7 +292,7 @@ TEST_F(ConnectionTest, AfterThePeersFinRequestsAlreadyReceivedAreStillServed) {
     open();
     peerSends(echo(1) + echo(2));
     peerFinishesSending();
-    ASSERT_TRUE(connection->receive());
+    receiveBytesThenFin();
 
     EXPECT_EQ(connection->state(), State::ReadClosed);
     EXPECT_FALSE(connection->wantsRead());
@@ -312,7 +320,7 @@ TEST_F(ConnectionTest, AFrameCutOffByThePeersFinIsDropped) {
     open();
     peerSends(echo(1).substr(0, 10));
     peerFinishesSending();
-    ASSERT_TRUE(connection->receive());
+    receiveBytesThenFin();
 
     EXPECT_FALSE(connection->finished());
     EXPECT_EQ(nextRequestId(), 0u);
@@ -325,7 +333,7 @@ TEST_F(ConnectionTest, ABadLengthAfterThePeersFinStaysReadClosed) {
     appendU32(badLength, 5);
     peerSends(badLength);
     peerFinishesSending();
-    ASSERT_TRUE(connection->receive());
+    receiveBytesThenFin();
 
     EXPECT_EQ(nextRequestId(), 0u);
     EXPECT_EQ(connection->state(), State::ReadClosed);

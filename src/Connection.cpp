@@ -74,7 +74,8 @@ bool Connection::receive() {
         room -= input.size();
 
     while (room > 0) {
-        ssize_t n = recv(socket.get(), chunk, std::min(sizeof(chunk), room), 0);
+        std::size_t wanted = std::min(sizeof(chunk), room);
+        ssize_t n = recv(socket.get(), chunk, wanted, 0);
 
         if (n > 0) {
             auto count = static_cast<std::size_t>(n);
@@ -83,6 +84,14 @@ bool Connection::receive() {
                 input.append({chunk, count});
 
             room -= count;
+
+            // Less than was asked for, so the socket is empty now, and
+            // asking again would only be told so. If more arrives, or
+            // the peer closes, the poller reports the socket again. That
+            // holds because the pollers are level-triggered: they report
+            // a socket for as long as it has something, not once.
+            if (count < wanted)
+                break;
         }
         else if (n == 0) {
             currentState = State::ReadClosed;

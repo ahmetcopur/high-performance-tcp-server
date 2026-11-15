@@ -126,7 +126,9 @@ public:
     }
 
     // Takes what the socket has, up to the input limit. In Closing the
-    // bytes are dropped. Returns false if the socket failed.
+    // bytes are dropped. Returns false if the socket failed. When the
+    // peer has closed after its last bytes, this call takes the bytes
+    // and the next one finds the end.
     bool receive();
 
     // Sends as much pending output as the socket takes. Returns false if
