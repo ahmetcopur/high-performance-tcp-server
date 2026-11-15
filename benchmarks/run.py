@@ -20,6 +20,8 @@ Suites:
     workers      1, 2, 4 and 8 workers with echo, light and heavy compute
     latency      open loop at fractions of the measured capacity
     full         all of the above except quick
+    hotpath      seven cells that show what a change to the request path
+                 did. Not part of full.
 """
 
 import argparse
@@ -53,8 +55,11 @@ def echo(payload):
 
 
 def cell(name, load, connections=100, workers=4, idle=0, rate_fraction=None,
-         client_threads=None):
+         client_threads=None, rate=None):
     return {
+        # Open loop at this many requests a second. rate_fraction is the
+        # other way to ask for an open loop.
+        "rate": rate,
         # None means the runner's --client-threads.
         "client_threads": client_threads,
         "name": name,
@@ -137,6 +142,23 @@ def cells_of(suite):
                 client_threads=2,
             )
             for fraction in (0.25, 0.5, 0.75, 0.9)
+        ]
+
+    if suite == "hotpath":
+        # Run before and after every change in step 10. Echo with one,
+        # four and eight workers, because the cost of handing a request
+        # to a worker depends on how many there are. Light compute, where
+        # the workers do some work. Heavy compute and a large payload, to
+        # catch a change that helps small requests at the cost of others.
+        # And latency at a fixed rate, the same rate before and after.
+        return [
+            cell("echo-64B-1w", echo(64), workers=1),
+            cell("echo-64B-4w", echo(64)),
+            cell("echo-64B-8w", echo(64), workers=8),
+            cell("compute-light-4w", LIGHT),
+            cell("compute-heavy-4w", HEAVY),
+            cell("echo-65536B-4w", echo(65536)),
+            cell("echo-64B-4w-30000rps", echo(64), rate=30000, client_threads=2),
         ]
 
     if suite == "full":
@@ -593,7 +615,7 @@ def main():
     capacity = None
 
     for cell_config in cells:
-        rate = 0
+        rate = cell_config["rate"] or 0
         if cell_config["rate_fraction"] is not None:
             rate = round(capacity * cell_config["rate_fraction"])
 
