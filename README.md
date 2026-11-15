@@ -33,6 +33,20 @@ ctest --test-dir build --output-on-failure
 The default build type is `RelWithDebInfo`. Pick another one with
 `-DCMAKE_BUILD_TYPE=Debug` or `-DCMAKE_BUILD_TYPE=Release`.
 
+`ctest` runs, in about two minutes on the Mac and three on Linux, where
+the integration and stress suites run once for each poller:
+
+| | |
+| --- | --- |
+| Unit tests | GoogleTest, one program per module |
+| `integration_poll`, `integration_epoll` | The real server from the outside, once per poller the platform has |
+| `stress_poll`, `stress_epoll` | The server under abuse: bursts, churn, clients that never read or never finish, a full queue, no descriptors, restarts. Each test ends by checking that nothing was left behind and that the server stops cleanly |
+| `loadgen` | The load generator against the server |
+| `soak_smoke` | Half a minute of the soak test |
+
+Not part of `ctest`: the fuzz targets and the half-hour soak test. Both
+are in [docs/reliability.md](docs/reliability.md), with what they found.
+
 ## Run
 
 ```bash
@@ -94,6 +108,7 @@ bounded:
 | `WARNINGS_AS_ERRORS` | `OFF` | Adds `-Werror`. CI turns it on. |
 | `ENABLE_ASAN` | `OFF` | AddressSanitizer and UndefinedBehaviorSanitizer. |
 | `ENABLE_TSAN` | `OFF` | ThreadSanitizer. Cannot be combined with `ENABLE_ASAN`. |
+| `ENABLE_FUZZING` | `OFF` | Builds the libFuzzer targets `fuzz_decode` and `fuzz_stream`, with ASan and UBSan. Needs clang. |
 
 Sanitizer builds go in their own build directories:
 
@@ -191,16 +206,19 @@ tests/         test_buffer.cpp, test_config.cpp, test_connection.cpp,
                test_request_handler.cpp, test_threadpool.cpp,
                test_timer_queue.cpp, test_waker.cpp (GoogleTest)
                test_server.py (black-box, starts the real server)
+               test_stress.py (stress and fault tests)
                test_loadgen.py (the load generator against the server)
                protocol.py (Python client for the protocol)
+               fuzz/ (two libFuzzer targets and their corpus)
 benchmarks/    loadgen/ (the load generator, C++), run.py (runs a
                suite), analyze.py (report and plots), profile.py
                (profiles the server with perf), flamegraph.py (draws
-               a flame graph), benchmark.py (smoke test), README.md
-               (method), RESULTS.md (findings of step 9), results/
-               (raw data of every run), profiles/ (every profile)
+               a flame graph), soak.py (the soak test), benchmark.py
+               (smoke test), README.md (method), RESULTS.md (findings
+               of step 9), results/ (raw data of every run),
+               profiles/ (every profile)
 docs/          architecture.md, protocol.md, performance.md,
-               PROGRESS.md
+               reliability.md, PROGRESS.md
 Dockerfile     Linux environment for building and testing
 Dockerfile.profile  the same with perf, for profiling
 ```

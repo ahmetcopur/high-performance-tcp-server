@@ -17,7 +17,7 @@ comparable.
 - [x] 8. Thread pool engineering
 - [x] 9. Rebuild the benchmark suite
 - [x] 10. Profiling, then optimization
-- [ ] 11. Reliability and fault injection
+- [x] 11. Reliability and fault injection
 - [ ] 12. Polish
 
 ## Environments
@@ -1001,6 +1001,119 @@ Not verified:
   `connections` were run again. The numbers in RESULTS.md describe the
   server before this step.
 
+## Step 11: reliability and fault injection (2026-11-15)
+
+What changed: three kinds of test were added, and nothing in the server.
+They are described in [reliability.md](reliability.md), with how to run
+them, what they found, and what they cannot show.
+
+- **Fuzzing.** Two libFuzzer targets in `tests/fuzz/`, built with
+  `-DENABLE_FUZZING=ON`. `fuzz_decode` gives arbitrary bytes to the
+  frame decoder and checks its answer against the bytes. `fuzz_stream`
+  feeds a byte stream through a real `Connection` in pieces and compares
+  what comes out with the same bytes decoded in one piece. A seed corpus
+  is committed, and CI fuzzes each target for a minute.
+- **Stress and fault tests.** `tests/test_stress.py`, nine tests, run by
+  `ctest` once per poller: a connection burst over the limit, churn in
+  eight ways, slow readers, slowloris writers, queue saturation,
+  descriptor exhaustion, shutdown under load, 25 restarts, and all of it
+  together. Each ends by checking that nothing was left behind and that
+  the server stops cleanly.
+- **Soak test.** `benchmarks/soak.py`: mixed load in one-minute cycles,
+  with memory and descriptors read while the server is idle between
+  them. `ctest` runs half a minute of it.
+
+No bug was found in the server. Three were found in how it is tested,
+see below.
+
+Decisions:
+
+- **The stream target compares against a second reading of the same
+  bytes,** not against expected output written by hand. That gives the
+  fuzzer an oracle for every input it invents.
+- **Limits are set low in the fuzz targets,** 1,024 and 256 bytes, so
+  that the fuzzer reaches them.
+- **Each fuzz target and each kind of check was tried on a planted
+  bug.** A test that has never failed has not shown that it can. Four
+  bugs were planted and taken out again: two for the fuzz targets, a
+  leaked descriptor for the stress tests, a leak of 16 bytes per request
+  for the soak test.
+- **The soak test measures footprint on macOS, not resident memory.**
+  The planted leak showed why: leaked memory is never touched again, is
+  compressed, and stops being counted as resident. By resident memory
+  the leaking server passed.
+- **The soak test judges the idle server between cycles,** not the
+  server under load, where what it holds depends on what is in flight.
+- **Memory must pass two questions,** the last third against the first
+  and a fitted line. One low reading at the end decided the first
+  version of the check in the leaking server's favour.
+- **The soak test expects its idle connections to be timed out.** The
+  first two half-hour runs failed on exactly that: the idle timeout and
+  the cycle were both a minute, the server closed the 200 idle
+  connections as it should, and the test called it 6,000 lost
+  connections. The timeout is now half a cycle and the test demands
+  that every idle connection is closed by it, and no other.
+- **The stress tests make the hard case happen and do not wait for
+  it.** Two of them passed or failed by timing at first: one could pass
+  without ever running out of descriptors, the other failed on Linux
+  because the server was too quick to reach its connection limit.
+- **On macOS the fuzz targets are linked with Apple's previous linker**
+  (`-ld_classic`). The current one refuses the tables Homebrew clang 23
+  writes for libFuzzer.
+
+Fuzzing, on the Mac with Homebrew clang 23.1.5, ASan and UBSan:
+`fuzz_decode` 194,296,437 inputs in 5 minutes, `fuzz_stream` 1,505,745
+in 15 minutes, no failure.
+
+Soak, 30 minutes each, side by side on the laptop, Release builds of
+commit `cedb89e`: on the Mac 139,081,589 requests, memory of the idle
+server between 2.70 and 4.47 MiB after warm-up, 7 descriptors at the end
+of every cycle. In the Linux container 118,434,528 requests, 4.98 to
+5.17 MiB, 7 descriptors. Both passed. The two runs before them, on
+commit `ed7bd22`, are kept and say FAILED, for the reason given above.
+
+Verified on the Mac, warnings as errors, no warnings:
+
+| Configuration | Compiler | Result |
+| --- | --- | --- |
+| RelWithDebInfo | Apple clang 17 | 170 of 170 tests pass, in 113 s |
+| Debug, `ENABLE_ASAN` | Homebrew clang 23.1.5 | 170 of 170, in 145 s |
+| Debug, `ENABLE_TSAN` | Homebrew clang 23.1.5 | 170 of 170, in 265 s |
+
+The 170 are 166 GoogleTest cases, `integration_poll`, `stress_poll`,
+`loadgen` and `soak_smoke`.
+
+Verified in the Linux container (Ubuntu 24.04, g++ 13.3.0), integration
+and stress suites on both pollers:
+
+| Configuration | Result |
+| --- | --- |
+| RelWithDebInfo | 189 of 189, in 176 s |
+| Debug, `ENABLE_ASAN` | 189 of 189, in 513 s |
+| Debug, `ENABLE_TSAN` | 189 of 189, in 208 s |
+
+Before that, the stress suite was run by itself four and then six times
+in a row on the Mac, and three times per poller in the container.
+
+Verified in CI, GitHub Actions run 43762315229 on commit `8cfa654`: all
+seven jobs pass on the first run, no warnings. The Ubuntu jobs run 189
+tests, the macOS jobs 170. The new fuzz job, on Ubuntu with its clang,
+tried 27,709,574 inputs on the decoder and 128,725 on the stream target
+in a minute each, with no failure.
+
+Not verified:
+
+- **The fuzz targets on Linux for longer than CI's minute.** The Linux
+  image has no clang.
+- **A soak longer than half an hour,** or on Linux hardware.
+- **The soak test's allowance.** 2 MiB or 5% is a choice. A leak below
+  it passes.
+- **Anything over a real network:** loss, delay, a peer that vanishes
+  without a reset.
+- **The event loop, pollers, pool and timers under a fuzzer.** The
+  stream target drives a `Connection` by hand.
+- **The server out of memory.**
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -1120,3 +1233,17 @@ Not verified:
 37. **A benchmark suite can miss a difference.** The server had two
     ways of running and one suite caught only the faster. Nothing in
     the runner looks for that.
+38. **Fuzzing on macOS depends on a linker Apple has deprecated.** The
+    fuzz targets link only with `-ld_classic`. When that goes, fuzzing
+    on the Mac needs another linker or a clang whose tables the new one
+    accepts. CI fuzzes on Linux and is not affected.
+39. **The Linux image cannot build the fuzz targets.** It has g++ only.
+40. **The soak test does not judge memory under a sanitizer.**
+    AddressSanitizer keeps freed memory back on purpose, 380 MiB of it
+    in half a minute, and how fast that fills has nothing to do with
+    the server. The figures are reported and descriptors are still
+    judged.
+41. **A closed lid ends any long run on the Mac.** It happened to the
+    first benchmark run in step 9 and to a fuzz run in step 11. The
+    benchmark runner and the soak test notice a sleep. The fuzzer does
+    not: it reported an input as taking 933 seconds.

@@ -9,6 +9,7 @@ How the server is measured, and how to get any number in a report again.
 | `analyze.py` | Turns a results directory into `report.md` and plots. |
 | `profile.py` | Profiles the server under load with perf: CPU, system calls, allocations. Linux only. |
 | `flamegraph.py` | Draws a flame graph from the stacks `profile.py` collects. |
+| `soak.py` | The soak test: mixed load for half an hour, watching memory and descriptors. See [docs/reliability.md](../docs/reliability.md). |
 | `benchmark.py` | A quick smoke test in Python. Not for numbers. |
 | `results/` | One directory per suite run, with the raw data. |
 | `profiles/` | One directory per profile. |
