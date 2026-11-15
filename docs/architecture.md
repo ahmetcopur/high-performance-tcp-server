@@ -73,6 +73,41 @@ wakes the event loop through the waker.
 The two sides share exactly two things: the pool's task queue and the
 completion queue, each behind its own mutex.
 
+## The path of a request
+
+One turn of the event loop does these things in this order: it takes
+the finished work off the completion queue, wakes workers, looks at the
+deadlines, waits in the poller, and handles the sockets the poller
+reported. A request passes through two turns at least.
+
+1. **The poller reports the socket readable.** The loop reads with
+   `recv()` into the connection's input buffer until a call returns less
+   than it asked for, which means the socket is empty. For a small
+   request that is one call.
+2. **`TcpServer::advance()` decodes what it can.** PING, STATS and
+   frames that are wrong in a way that keeps the stream are answered at
+   once, into the connection's output buffer. The first ECHO or COMPUTE
+   is queued for the pool with `tryQueue()`, and the connection decodes
+   nothing further. If the queue is full, the request is answered with
+   ERROR 5 and decoding goes on.
+3. **`advance()` sends what the connection owes.** Answers made in step
+   2 go out now, in one `send()`.
+4. **Before the loop waits, it wakes workers,** one for each request
+   waiting, as far as any are asleep.
+5. **A worker runs the request** and calls `EventLoop::post()` with the
+   encoded response. `post()` wakes the loop if the completion queue was
+   empty before.
+6. **The loop takes the completion queue out whole.** For each result it
+   finds the connection by descriptor and id. `Connection::finishWork()`
+   offers the response to the socket from where it is. What the socket
+   does not take is copied to the output buffer, and only then is the
+   poller asked to report when the socket can be written.
+7. **`advance()` runs again** for that connection, and the next request
+   in its input, if there is one, starts at step 2.
+
+How this came to look the way it does, and what each part costs, is in
+[performance.md](performance.md).
+
 ## The worker pool
 
 The pool has a fixed number of threads and one queue of tasks. The
@@ -189,8 +224,8 @@ closes the descriptor and destroys the object in one step.
 2. A connection in Closing never serves another request. Its input
    buffer is empty and stays empty.
 3. At most one request per connection is with a worker. Nothing more is
-   decoded until its response is queued, so responses leave in the order
-   the requests arrived.
+   decoded until its response has been sent or queued for sending, so
+   responses leave in the order the requests arrived.
 4. A connection may be destroyed while its request is with a worker. The
    worker holds no reference to it, and the completion is dropped by the
    id check.
