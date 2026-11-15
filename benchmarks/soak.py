@@ -11,7 +11,9 @@ Usage:
 The time is cut into cycles. In each cycle the server gets, all at once:
 
   - echo of 64 bytes over 20 connections, as fast as they go,
-  - 200 connections that are opened and then say nothing,
+  - 200 connections that are opened and then say nothing. The server's
+    idle timeout is set to half a cycle, so it has to close every one
+    of them, every cycle,
   - echo of 64 KiB over 5 connections,
   - light COMPUTE over 10 connections and PING over 5,
   - two clients that misbehave: resets, frames left unfinished, bad
@@ -30,7 +32,9 @@ It passes if, leaving out the first cycles as warm-up,
     than 2 MiB or 5 % above the median of the first third, whichever is
     larger, and neither is a straight line fitted through all of them,
   - no well-behaved request failed, timed out or lost its connection,
-  - the server is still running, and stops with exit code 0 when asked.
+  - every idle connection was closed by the server, and no other,
+  - the server is still running, and stops with exit code 0 when asked,
+  - the machine did not sleep in the middle of it.
 
 Memory here is what the process holds that cannot be had again from a
 file: on Linux its resident memory plus what was swapped out, on macOS
@@ -171,7 +175,9 @@ def wait_until_idle(pid, fds_before, timeout=60):
 
 
 def one_cycle(args, directory, number, pid):
-    until = time.monotonic() + args.cycle_seconds
+    started_wall = time.time()
+    started = time.monotonic()
+    until = started + args.cycle_seconds
     loadgens = []
 
     for load in LOADS:
@@ -227,7 +233,11 @@ def one_cycle(args, directory, number, pid):
     for thread in bad:
         thread.join()
 
-    return requests, peak_memory, peak_fds
+    # The wall clock goes on while the machine sleeps and this one does
+    # not. A cycle slept through says nothing about the server.
+    slept = (time.time() - started_wall) - (time.monotonic() - started) > 2
+
+    return requests, peak_memory, peak_fds, slept
 
 
 def verdict(samples, warmup, fds_before, exit_code):
@@ -260,13 +270,30 @@ def verdict(samples, warmup, fds_before, exit_code):
     for s in samples:
         for name, counts in s["requests"].items():
             for kind in ("busy", "errors", "timeouts", "connection_errors",
-                         "connect_failures", "idle_lost"):
+                         "connect_failures"):
                 if counts[kind]:
                     failed[f"{name} {kind}"] = failed.get(f"{name} {kind}", 0) + counts[kind]
     checks.append((
         "no well-behaved request failed",
         not failed,
         "none" if not failed else ", ".join(f"{k}: {v}" for k, v in failed.items()),
+    ))
+
+    # The idle timeout is half a cycle, so the idle connections must all
+    # be closed by it, and nothing else may be: a connection that is
+    # being used is never idle.
+    idle = {load["name"]: load["idle"] for load in LOADS}
+    wrong = [
+        f"cycle {s['cycle']} {name}: {counts['idle_lost']} of {idle[name]}"
+        for s in samples
+        for name, counts in s["requests"].items()
+        if counts["idle_lost"] != idle[name]
+    ]
+    closed = sum(c["idle_lost"] for s in samples for c in s["requests"].values())
+    checks.append((
+        "every idle connection was closed by the idle timeout, and no other",
+        not wrong,
+        f"{closed:,} closed" if not wrong else "; ".join(wrong[:5]),
     ))
 
     thrown = samples[-1]["stats"]["tasks_failed"] if samples else 0
@@ -276,6 +303,13 @@ def verdict(samples, warmup, fds_before, exit_code):
         "the server stops with exit code 0 when asked",
         exit_code == 0,
         f"exit code {exit_code}",
+    ))
+
+    slept = [s["cycle"] for s in samples if s["machine_slept"]]
+    checks.append((
+        "the machine did not sleep during the run",
+        not slept,
+        "it did not" if not slept else f"it slept in cycles {slept}",
     ))
 
     return checks
@@ -397,6 +431,9 @@ def main():
         "--port", str(PORT),
         "--workers", "4",
         "--poller", poller,
+        # Half a cycle, so that the idle connections of every cycle run
+        # into it.
+        "--idle-timeout-ms", str(int(args.cycle_seconds * 500)),
     ]
     log_path = os.path.join(directory, "server.log")
 
@@ -421,7 +458,9 @@ def main():
             started = time.monotonic()
 
             for number in range(1, cycles + 1):
-                requests, peak_memory, peak_fds = one_cycle(args, directory, number, server.pid)
+                requests, peak_memory, peak_fds, slept = one_cycle(
+                    args, directory, number, server.pid
+                )
 
                 if server.poll() is not None:
                     print(f"the server ended in cycle {number}, exit code {server.returncode}")
@@ -435,6 +474,7 @@ def main():
                     "fds": fds,
                     "peak_memory_bytes": peak_memory,
                     "peak_fds": peak_fds,
+                    "machine_slept": slept,
                     "stats": counters,
                     "requests": requests,
                 }

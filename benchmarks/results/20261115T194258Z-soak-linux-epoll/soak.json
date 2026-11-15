@@ -1,0 +1,1848 @@
+{
+ "passed": false,
+ "checks": [
+  [
+   "descriptors at the end of every cycle are what they were at the start",
+   true,
+   "7 throughout"
+  ],
+  [
+   "memory at the end of the cycles does not grow",
+   true,
+   "first third 5.14 MiB, last third 5.14 MiB, fitted growth over the run +0.36 MiB, allowed 2.0 MiB"
+  ],
+  [
+   "no well-behaved request failed",
+   false,
+   "echo idle_lost: 6000"
+  ],
+  [
+   "no request failed inside a worker",
+   true,
+   "0"
+  ],
+  [
+   "the server stops with exit code 0 when asked",
+   true,
+   "exit code 0"
+  ]
+ ],
+ "minutes": 30.1,
+ "cycle_seconds": 60.0,
+ "cycles_planned": 30,
+ "warmup_cycles": 3,
+ "environment": {
+  "date_utc": "2026-11-15T20:13:03+00:00",
+  "os": "Ubuntu 24.04.5 LTS",
+  "kernel": "Linux 7.0.14-linuxkit",
+  "machine": "aarch64",
+  "cpu": "aarch64",
+  "cores": 8,
+  "power": null,
+  "in_container": true,
+  "python": "3.12.3",
+  "open_files_limit": {
+   "soft": 1048576,
+   "hard": 1048576
+  },
+  "build": {
+   "compiler": "GNU 13.3.0",
+   "compiler_path": "/usr/bin/c++",
+   "cxx_standard": "17",
+   "build_type": "Release",
+   "flags": " -O3 -DNDEBUG",
+   "sanitizer": "none",
+   "system": "Linux 7.0.14-linuxkit",
+   "processor": "aarch64"
+  },
+  "git_commit": "ed7bd2287e171c30d4b5bc4bb53b2a9e2ebefb52",
+  "git_uncommitted_changes": null
+ },
+ "command": "benchmarks/soak.py --build /build --minutes 30",
+ "server_command": [
+  "/build/server",
+  "--port",
+  "18091",
+  "--workers",
+  "4",
+  "--poller",
+  "epoll"
+ ],
+ "loads": [
+  {
+   "name": "echo",
+   "type": "echo",
+   "payload": 64,
+   "connections": 20,
+   "idle": 200
+  },
+  {
+   "name": "large",
+   "type": "echo",
+   "payload": 65536,
+   "connections": 5,
+   "idle": 0
+  },
+  {
+   "name": "compute",
+   "type": "compute",
+   "payload": 64,
+   "iterations": 100,
+   "connections": 10,
+   "idle": 0
+  },
+  {
+   "name": "ping",
+   "type": "ping",
+   "payload": 0,
+   "connections": 5,
+   "idle": 0
+  }
+ ],
+ "fds_before": 7,
+ "memory_before": 3371008,
+ "server_exit_code": 0,
+ "server_log_lines": 1810,
+ "samples": [
+  {
+   "cycle": 1,
+   "minute": 1.0,
+   "memory_bytes": 5201920,
+   "fds": 7,
+   "peak_memory_bytes": 5935104,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 3260933,
+    "tasks_rejected": 0,
+    "tasks_completed": 3260933,
+    "tasks_failed": 0,
+    "worker_busy_us": 35023544,
+    "uptime_us": 60540695
+   },
+   "requests": {
+    "echo": {
+     "completed": 1913118,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 402846,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 925229,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 952306,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 2,
+   "minute": 2.0,
+   "memory_bytes": 5328896,
+   "fds": 7,
+   "peak_memory_bytes": 5935104,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 5991989,
+    "tasks_rejected": 0,
+    "tasks_completed": 5991989,
+    "tasks_failed": 0,
+    "worker_busy_us": 71175953,
+    "uptime_us": 120678542
+   },
+   "requests": {
+    "echo": {
+     "completed": 1602668,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 338688,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 771816,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 801872,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 3,
+   "minute": 3.01,
+   "memory_bytes": 5398528,
+   "fds": 7,
+   "peak_memory_bytes": 6033408,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 9091823,
+    "tasks_rejected": 0,
+    "tasks_completed": 9091823,
+    "tasks_failed": 0,
+    "worker_busy_us": 107695982,
+    "uptime_us": 180824365
+   },
+   "requests": {
+    "echo": {
+     "completed": 1824459,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 381255,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 875108,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 863689,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 4,
+   "minute": 4.01,
+   "memory_bytes": 5267456,
+   "fds": 7,
+   "peak_memory_bytes": 5963776,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 12294435,
+    "tasks_rejected": 0,
+    "tasks_completed": 12294435,
+    "tasks_failed": 0,
+    "worker_busy_us": 144328934,
+    "uptime_us": 240955700
+   },
+   "requests": {
+    "echo": {
+     "completed": 1884367,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 392800,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 905278,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 912232,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 5,
+   "minute": 5.01,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 5939200,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 15576978,
+    "tasks_rejected": 0,
+    "tasks_completed": 15576978,
+    "tasks_failed": 0,
+    "worker_busy_us": 180944543,
+    "uptime_us": 301081604
+   },
+   "requests": {
+    "echo": {
+     "completed": 1932743,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 401869,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 929178,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 940582,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 6,
+   "minute": 6.01,
+   "memory_bytes": 5328896,
+   "fds": 7,
+   "peak_memory_bytes": 5963776,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 18887391,
+    "tasks_rejected": 0,
+    "tasks_completed": 18887391,
+    "tasks_failed": 0,
+    "worker_busy_us": 216903318,
+    "uptime_us": 361205488
+   },
+   "requests": {
+    "echo": {
+     "completed": 1949558,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 404280,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 937112,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 963394,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 7,
+   "minute": 7.02,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6025216,
+   "peak_fds": 251,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 22173902,
+    "tasks_rejected": 0,
+    "tasks_completed": 22173902,
+    "tasks_failed": 0,
+    "worker_busy_us": 252450870,
+    "uptime_us": 421332616
+   },
+   "requests": {
+    "echo": {
+     "completed": 1934897,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 401316,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 931051,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 956864,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 8,
+   "minute": 8.02,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6029312,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 25427841,
+    "tasks_rejected": 0,
+    "tasks_completed": 25427841,
+    "tasks_failed": 0,
+    "worker_busy_us": 288785226,
+    "uptime_us": 481457215
+   },
+   "requests": {
+    "echo": {
+     "completed": 1914681,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 397486,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 921632,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 947999,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 9,
+   "minute": 9.02,
+   "memory_bytes": 5328896,
+   "fds": 7,
+   "peak_memory_bytes": 5963776,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 28533253,
+    "tasks_rejected": 0,
+    "tasks_completed": 28533253,
+    "tasks_failed": 0,
+    "worker_busy_us": 325117234,
+    "uptime_us": 541585969
+   },
+   "requests": {
+    "echo": {
+     "completed": 1827545,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 379896,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 879120,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 902611,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 10,
+   "minute": 10.02,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6000640,
+   "peak_fds": 250,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 31647338,
+    "tasks_rejected": 0,
+    "tasks_completed": 31647338,
+    "tasks_failed": 0,
+    "worker_busy_us": 360143922,
+    "uptime_us": 601711017
+   },
+   "requests": {
+    "echo": {
+     "completed": 1833245,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 380876,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 881194,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 905463,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 11,
+   "minute": 11.02,
+   "memory_bytes": 5263360,
+   "fds": 7,
+   "peak_memory_bytes": 6160384,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 34697453,
+    "tasks_rejected": 0,
+    "tasks_completed": 34697453,
+    "tasks_failed": 0,
+    "worker_busy_us": 396479133,
+    "uptime_us": 661840854
+   },
+   "requests": {
+    "echo": {
+     "completed": 1793728,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 373953,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 863630,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 887078,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 12,
+   "minute": 12.03,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6000640,
+   "peak_fds": 250,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 37630414,
+    "tasks_rejected": 0,
+    "tasks_completed": 37630414,
+    "tasks_failed": 0,
+    "worker_busy_us": 431816856,
+    "uptime_us": 721973272
+   },
+   "requests": {
+    "echo": {
+     "completed": 1724398,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 359973,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 829855,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 857764,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 13,
+   "minute": 13.03,
+   "memory_bytes": 5328896,
+   "fds": 7,
+   "peak_memory_bytes": 6070272,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 40835855,
+    "tasks_rejected": 0,
+    "tasks_completed": 40835855,
+    "tasks_failed": 0,
+    "worker_busy_us": 468083284,
+    "uptime_us": 782106083
+   },
+   "requests": {
+    "echo": {
+     "completed": 1885744,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 391719,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 908590,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 938173,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 14,
+   "minute": 14.03,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6090752,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 43775408,
+    "tasks_rejected": 0,
+    "tasks_completed": 43775408,
+    "tasks_failed": 0,
+    "worker_busy_us": 505210899,
+    "uptime_us": 842236777
+   },
+   "requests": {
+    "echo": {
+     "completed": 1727016,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 360921,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 832566,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 854563,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 15,
+   "minute": 15.03,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6033408,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 46870693,
+    "tasks_rejected": 0,
+    "tasks_completed": 46870693,
+    "tasks_failed": 0,
+    "worker_busy_us": 542652618,
+    "uptime_us": 902364966
+   },
+   "requests": {
+    "echo": {
+     "completed": 1821871,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 378008,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 876068,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 891912,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 16,
+   "minute": 16.03,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 5939200,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 50096959,
+    "tasks_rejected": 0,
+    "tasks_completed": 50096959,
+    "tasks_failed": 0,
+    "worker_busy_us": 578832786,
+    "uptime_us": 962495700
+   },
+   "requests": {
+    "echo": {
+     "completed": 1900430,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 393272,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 913760,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 936569,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 17,
+   "minute": 17.04,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6029312,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 53380546,
+    "tasks_rejected": 0,
+    "tasks_completed": 53380546,
+    "tasks_failed": 0,
+    "worker_busy_us": 614681514,
+    "uptime_us": 1022624859
+   },
+   "requests": {
+    "echo": {
+     "completed": 1933585,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 399746,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 930731,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 961881,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 18,
+   "minute": 18.04,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6000640,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 56657402,
+    "tasks_rejected": 0,
+    "tasks_completed": 56657402,
+    "tasks_failed": 0,
+    "worker_busy_us": 651203281,
+    "uptime_us": 1082752027
+   },
+   "requests": {
+    "echo": {
+     "completed": 1931397,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 398401,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 928250,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 957255,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 19,
+   "minute": 19.04,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 5939200,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 59912796,
+    "tasks_rejected": 0,
+    "tasks_completed": 59912796,
+    "tasks_failed": 0,
+    "worker_busy_us": 687820149,
+    "uptime_us": 1142878084
+   },
+   "requests": {
+    "echo": {
+     "completed": 1917621,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 395639,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 922173,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 950557,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 20,
+   "minute": 20.04,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6066176,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 63097791,
+    "tasks_rejected": 0,
+    "tasks_completed": 63097791,
+    "tasks_failed": 0,
+    "worker_busy_us": 724491755,
+    "uptime_us": 1203008537
+   },
+   "requests": {
+    "echo": {
+     "completed": 1874662,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 387855,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 903752,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 937921,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 21,
+   "minute": 21.05,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6000640,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 66267656,
+    "tasks_rejected": 0,
+    "tasks_completed": 66267656,
+    "tasks_failed": 0,
+    "worker_busy_us": 761823827,
+    "uptime_us": 1263137230
+   },
+   "requests": {
+    "echo": {
+     "completed": 1866481,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 385603,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 898578,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 924765,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 22,
+   "minute": 22.05,
+   "memory_bytes": 5328896,
+   "fds": 7,
+   "peak_memory_bytes": 6070272,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 69435275,
+    "tasks_rejected": 0,
+    "tasks_completed": 69435275,
+    "tasks_failed": 0,
+    "worker_busy_us": 799028375,
+    "uptime_us": 1323271168
+   },
+   "requests": {
+    "echo": {
+     "completed": 1865176,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 386602,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 896680,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 921327,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 23,
+   "minute": 23.05,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6033408,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 72661117,
+    "tasks_rejected": 0,
+    "tasks_completed": 72661117,
+    "tasks_failed": 0,
+    "worker_busy_us": 836871836,
+    "uptime_us": 1383403954
+   },
+   "requests": {
+    "echo": {
+     "completed": 1899444,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 391087,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 915554,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 941357,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 24,
+   "minute": 24.05,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6000640,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 75880164,
+    "tasks_rejected": 0,
+    "tasks_completed": 75880164,
+    "tasks_failed": 0,
+    "worker_busy_us": 875401616,
+    "uptime_us": 1443537589
+   },
+   "requests": {
+    "echo": {
+     "completed": 1896510,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 390406,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 912462,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 935817,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 25,
+   "minute": 25.05,
+   "memory_bytes": 5599232,
+   "fds": 7,
+   "peak_memory_bytes": 6066176,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 78949502,
+    "tasks_rejected": 0,
+    "tasks_completed": 78949502,
+    "tasks_failed": 0,
+    "worker_busy_us": 913348677,
+    "uptime_us": 1503673746
+   },
+   "requests": {
+    "echo": {
+     "completed": 1805368,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 375064,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 869817,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 888830,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 26,
+   "minute": 26.06,
+   "memory_bytes": 5394432,
+   "fds": 7,
+   "peak_memory_bytes": 6193152,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 82116397,
+    "tasks_rejected": 0,
+    "tasks_completed": 82116397,
+    "tasks_failed": 0,
+    "worker_busy_us": 952431826,
+    "uptime_us": 1563808721
+   },
+   "requests": {
+    "echo": {
+     "completed": 1862215,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 387026,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 897830,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 913177,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 27,
+   "minute": 27.06,
+   "memory_bytes": 5328896,
+   "fds": 7,
+   "peak_memory_bytes": 6066176,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 85372537,
+    "tasks_rejected": 0,
+    "tasks_completed": 85372537,
+    "tasks_failed": 0,
+    "worker_busy_us": 989670201,
+    "uptime_us": 1623939672
+   },
+   "requests": {
+    "echo": {
+     "completed": 1915431,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 399585,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 921041,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 926365,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 28,
+   "minute": 28.06,
+   "memory_bytes": 5734400,
+   "fds": 7,
+   "peak_memory_bytes": 6000640,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 88557756,
+    "tasks_rejected": 0,
+    "tasks_completed": 88557756,
+    "tasks_failed": 0,
+    "worker_busy_us": 1026698879,
+    "uptime_us": 1684063787
+   },
+   "requests": {
+    "echo": {
+     "completed": 1876633,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 387652,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 900695,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 931945,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 29,
+   "minute": 29.06,
+   "memory_bytes": 6049792,
+   "fds": 7,
+   "peak_memory_bytes": 6213632,
+   "peak_fds": 249,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 91784083,
+    "tasks_rejected": 0,
+    "tasks_completed": 91784083,
+    "tasks_failed": 0,
+    "worker_busy_us": 1063494172,
+    "uptime_us": 1744192508
+   },
+   "requests": {
+    "echo": {
+     "completed": 1903419,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 391666,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 910355,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 920859,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  },
+  {
+   "cycle": 30,
+   "minute": 30.07,
+   "memory_bytes": 5984256,
+   "fds": 7,
+   "peak_memory_bytes": 6316032,
+   "peak_fds": 250,
+   "stats": {
+    "connections": 1,
+    "queue_depth": 0,
+    "queue_capacity": 1024,
+    "workers": 4,
+    "tasks_submitted": 95291605,
+    "tasks_rejected": 0,
+    "tasks_completed": 95291605,
+    "tasks_failed": 0,
+    "worker_busy_us": 1101751537,
+    "uptime_us": 1804314411
+   },
+   "requests": {
+    "echo": {
+     "completed": 2073457,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 200
+    },
+    "large": {
+     "completed": 423492,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "compute": {
+     "completed": 991091,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    },
+    "ping": {
+     "completed": 989974,
+     "busy": 0,
+     "errors": 0,
+     "timeouts": 0,
+     "connection_errors": 0,
+     "connect_failures": 0,
+     "idle_lost": 0
+    }
+   }
+  }
+ ]
+}
