@@ -1,0 +1,143 @@
+{
+ "tool": "cpu",
+ "load": {
+  "name": "large",
+  "type": "echo",
+  "payload": 65536
+ },
+ "workers": 4,
+ "connections": 100,
+ "environment": {
+  "date_utc": "2026-11-15T10:43:59+00:00",
+  "os": "Ubuntu 24.04.5 LTS",
+  "kernel": "Linux 7.0.14-linuxkit",
+  "machine": "aarch64",
+  "cpu": "aarch64",
+  "cores": 8,
+  "power": null,
+  "in_container": true,
+  "python": "3.12.3",
+  "open_files_limit": {
+   "soft": 1048576,
+   "hard": 1048576
+  },
+  "build": {
+   "compiler": "GNU 13.3.0",
+   "compiler_path": "/usr/bin/c++",
+   "cxx_standard": "17",
+   "build_type": "Release",
+   "flags": "-g -fno-omit-frame-pointer -O3 -DNDEBUG",
+   "sanitizer": "none",
+   "system": "Linux 7.0.14-linuxkit",
+   "processor": "aarch64"
+  },
+  "git_commit": "24fab768e2d80b5fd8c48d57dd92f03111b8c6a4",
+  "git_uncommitted_changes": null
+ },
+ "command": "benchmarks/profile.py --build /build --tool cpu --load large",
+ "server_command": [
+  "/build/server",
+  "--port",
+  "18090",
+  "--workers",
+  "4",
+  "--idle-timeout-ms",
+  "600000"
+ ],
+ "loadgen_command": [
+  "taskset",
+  "-c",
+  "4-7",
+  "/build/loadgen",
+  "--port",
+  "18090",
+  "--connections",
+  "100",
+  "--threads",
+  "4",
+  "--warmup",
+  "1",
+  "--duration",
+  "7.0",
+  "--type",
+  "echo",
+  "--payload",
+  "65536",
+  "--iterations",
+  "0",
+  "--output",
+  "/src/benchmarks/profiles/20261115T104350Z-cpu-large-4w/loadgen.json"
+ ],
+ "loadgen_throughput_rps": 15105.654,
+ "result": {
+  "frequency_hz": 1999,
+  "seconds": 5.0,
+  "threads": {
+   "event loop": {
+    "samples": 9951,
+    "cores": 0.996,
+    "in_kernel": 0.3226,
+    "by_call": {
+     "the server's own code": 6789,
+     "send": 1486,
+     "recv": 1222,
+     "malloc and free": 366,
+     "epoll_wait": 71,
+     "mutex": 13,
+     "clock_gettime": 3,
+     "read (waker)": 1
+    },
+    "own_code_top": {
+     "[libc.so.6]": 6480,
+     "el0_da_[k]": 55,
+     "try_to_wake_up_[k]": 31,
+     "std::string::_M_replace(unsigned long, unsigned long, char const*, unsigned long)": 17,
+     "Connection::nextRequest(protocol::Frame&)": 16,
+     "call_timer_fn_[k]": 15,
+     "protocol::decodeFrame(std::basic_string_view<char, std::char_traits<char> >, unsigned int)": 12,
+     "get_mem_cgroup_from_mm_[k]": 11,
+     "Connection::finishWork(std::basic_string_view<char, std::char_traits<char> >)": 10,
+     "folios_put_refs_[k]": 10,
+     "handle_softirqs_[k]": 9,
+     "std::string::_M_append(char const*, unsigned long)": 8,
+     "TimerQueue::arm(int, unsigned long, time_point)": 6,
+     "handle_mm_fault_[k]": 6,
+     "std::string::_M_append(char const*, unsigned long)@plt": 4
+    }
+   },
+   "worker": {
+    "samples": 3525,
+    "cores": 0.353,
+    "in_kernel": 0.3274,
+    "by_call": {
+     "the server's own code": 3184,
+     "malloc and free": 254,
+     "pthread_cond_wait (worker goes to sleep)": 38,
+     "clock_gettime": 30,
+     "mutex": 12,
+     "write (waker)": 7
+    },
+    "own_code_top": {
+     "[libc.so.6]": 2169,
+     "el0_da_[k]": 314,
+     "folios_put_refs_[k]": 81,
+     "get_mem_cgroup_from_mm_[k]": 77,
+     "__rmqueue_pcplist_[k]": 49,
+     "__pi_clear_page_[k]": 34,
+     "_raw_spin_lock_[k]": 32,
+     "__handle_mm_fault_[k]": 31,
+     "try_charge_memcg_[k]": 29,
+     "handle_mm_fault_[k]": 29,
+     "_raw_spin_unlock_irqrestore_[k]": 26,
+     "mod_node_state_[k]": 26,
+     "pte_offset_map_lock_[k]": 21,
+     "charge_memcg_[k]": 14,
+     "count_vm_event_[k]": 14
+    }
+   }
+  },
+  "requests_in_window": 92205,
+  "window_s": 6.138,
+  "requests_per_s_in_window": 15021
+ }
+}

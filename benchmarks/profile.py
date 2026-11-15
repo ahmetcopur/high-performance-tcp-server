@@ -41,7 +41,12 @@ import flamegraph
 import run
 from run import protocol
 
-LOADS = {"echo": run.echo(64), "light": run.LIGHT, "heavy": run.HEAVY}
+LOADS = {
+    "echo": run.echo(64),
+    "large": run.echo(65536),
+    "light": run.LIGHT,
+    "heavy": run.HEAVY,
+}
 
 # What the server calls in libc to reach the kernel, or to wait. A sample
 # is filed under the first of these found on its stack, looking from the
