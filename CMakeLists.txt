@@ -207,6 +207,23 @@ if(BUILD_TESTING)
             "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
     endforeach()
 
+    # The stress and fault tests, likewise once per poller. They load
+    # the machine, so they take the same lock as the tests that measure
+    # time.
+    foreach(poller ${pollers})
+        add_test(NAME stress_${poller}
+            COMMAND Python3::Interpreter
+                    ${CMAKE_SOURCE_DIR}/tests/test_stress.py
+                    $<TARGET_FILE:server>
+                    --poller ${poller})
+
+        set_tests_properties(stress_${poller} PROPERTIES
+            TIMEOUT 600
+            RESOURCE_LOCK tcp_port_18080
+            FAIL_REGULAR_EXPRESSION
+            "ThreadSanitizer|AddressSanitizer|LeakSanitizer|runtime error:")
+    endforeach()
+
     # The load generator against the real server. It measures time, so it
     # takes the same lock and does not run beside the integration suite.
     add_test(NAME loadgen
