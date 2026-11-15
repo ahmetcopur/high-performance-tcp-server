@@ -179,7 +179,11 @@ void TcpServer::onCompletion(Completion& completion, Clock::time_point now) {
         return;
     }
 
-    it->second.finishWork(completion.response);
+    if (!it->second.finishWork(completion.response)) {
+        closeConnection(it);
+        return;
+    }
+
     advance(it->second, now);
 }
 

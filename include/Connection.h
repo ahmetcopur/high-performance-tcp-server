@@ -148,8 +148,11 @@ public:
     // The request just returned by nextRequest() goes to a worker.
     void startWork();
 
-    // The worker is done. Queues its encoded response.
-    void finishWork(std::string_view encoded);
+    // The worker is done, and this is its encoded response. If nothing
+    // is waiting to be sent, it goes to the socket from where it is, and
+    // only what the socket does not take is copied into the output.
+    // Returns false if the socket failed.
+    bool finishWork(std::string_view encoded);
 
     // A shutdown has begun. Requests not yet started are dropped, and a
     // connection that was Open ends through Closing.

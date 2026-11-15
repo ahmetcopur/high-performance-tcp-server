@@ -196,9 +196,28 @@ void Connection::startWork() {
     working = true;
 }
 
-void Connection::finishWork(std::string_view encoded) {
+bool Connection::finishWork(std::string_view encoded) {
     working = false;
+
+    // Behind output that is still waiting, the response has to wait
+    // too. Otherwise it is offered to the socket first. Copying a large
+    // response into the output only to send it from there a moment
+    // later was a fifth of the event loop's time with 64 KiB payloads.
+    while (output.size() == 0 && !encoded.empty()) {
+        ssize_t n = send(socket.get(), encoded.data(), encoded.size(), 0);
+
+        if (n > 0)
+            encoded.remove_prefix(static_cast<std::size_t>(n));
+        else if (n < 0 && errno == EINTR)
+            continue;
+        else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            break;
+        else
+            return false;
+    }
+
     respond(encoded);
+    return true;
 }
 
 void Connection::drain() {

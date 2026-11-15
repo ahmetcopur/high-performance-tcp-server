@@ -180,9 +180,74 @@ TEST_F(ConnectionTest, ServesNothingElseWhileARequestIsWithAWorker) {
     EXPECT_EQ(nextRequestId(), 0u);
     EXPECT_FALSE(connection->owesNothing());
 
-    connection->finishWork("response");
+    ASSERT_TRUE(connection->finishWork("response"));
 
     EXPECT_EQ(nextRequestId(), 2u);
+}
+
+TEST_F(ConnectionTest, AWorkersResponseGoesStraightToTheSocket) {
+    open();
+    arrive(echo(1));
+    ASSERT_EQ(nextRequestId(), 1u);
+    connection->startWork();
+
+    ASSERT_TRUE(connection->finishWork("response"));
+
+    // Sent already, with nothing left for flush() to do.
+    EXPECT_FALSE(connection->wantsWrite());
+    EXPECT_EQ(peerReads(), "response");
+}
+
+TEST_F(ConnectionTest, AWorkersResponseWaitsBehindOutputAlreadyQueued) {
+    open();
+    arrive(echo(1));
+    ASSERT_EQ(nextRequestId(), 1u);
+    connection->startWork();
+    connection->respond("first ");
+
+    ASSERT_TRUE(connection->finishWork("second"));
+
+    // Nothing has overtaken the queued bytes.
+    EXPECT_EQ(peerReads(), "");
+    ASSERT_TRUE(connection->flush(at(0)));
+    EXPECT_EQ(peerReads(), "first second");
+}
+
+TEST_F(ConnectionTest, WhatTheSocketDoesNotTakeOfAWorkersResponseIsQueued) {
+    open();
+    arrive(echo(1));
+    ASSERT_EQ(nextRequestId(), 1u);
+    connection->startWork();
+
+    // Far more than a socket buffer holds.
+    std::string large(8 * 1024 * 1024, 'x');
+    large.front() = '<';
+    large.back() = '>';
+
+    ASSERT_TRUE(connection->finishWork(large));
+    EXPECT_TRUE(connection->wantsWrite());
+
+    std::string received = peerReads();
+    EXPECT_GT(received.size(), 0u);
+    EXPECT_LT(received.size(), large.size());
+
+    while (connection->wantsWrite()) {
+        ASSERT_TRUE(connection->flush(at(0)));
+        received += peerReads();
+    }
+
+    received += peerReads();
+    EXPECT_EQ(received, large);
+}
+
+TEST_F(ConnectionTest, AWorkersResponseToAPeerThatIsGoneFails) {
+    open();
+    arrive(echo(1));
+    ASSERT_EQ(nextRequestId(), 1u);
+    connection->startWork();
+    peer.reset();
+
+    EXPECT_FALSE(connection->finishWork("response"));
 }
 
 TEST_F(ConnectionTest, SendsWhatWasQueued) {
@@ -302,7 +367,7 @@ TEST_F(ConnectionTest, AfterThePeersFinRequestsAlreadyReceivedAreStillServed) {
     connection->startWork();
     EXPECT_FALSE(connection->finished());
 
-    connection->finishWork("one");
+    ASSERT_TRUE(connection->finishWork("one"));
     ASSERT_EQ(nextRequestId(), 2u);
     connection->respond("two");
     EXPECT_EQ(nextRequestId(), 0u);
@@ -429,7 +494,7 @@ TEST_F(ConnectionTest, DrainDropsRequestsThatWereNotStarted) {
     EXPECT_EQ(connection->state(), State::Closing);
     EXPECT_FALSE(connection->owesNothing());
 
-    connection->finishWork("answer");
+    ASSERT_TRUE(connection->finishWork("answer"));
 
     EXPECT_EQ(nextRequestId(), 0u);
 
