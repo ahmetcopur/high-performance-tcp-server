@@ -396,7 +396,13 @@ docs/          architecture.md, protocol.md, performance.md,
                reliability.md, PROGRESS.md
 Dockerfile     Linux environment for building and testing
 Dockerfile.profile  the same with perf, for profiling
+LICENSE        MIT
 ```
 
 What each module is responsible for is listed at the top of
 [docs/architecture.md](docs/architecture.md).
+
+## Licence
+
+[MIT](LICENSE). GoogleTest, which the build fetches for the unit tests,
+has its own licence and is not part of this repository.

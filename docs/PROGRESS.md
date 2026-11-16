@@ -1159,9 +1159,10 @@ Decisions:
   The owner's choice.
 - **The tag is `v1.0.0`.** The twelve steps of the brief are done, and
   the protocol calls itself version 1.
-- **No licence file was added.** Which licence is the owner's decision
-  and has not been made. Without one, others may read the code and may
-  not reuse it.
+- **The licence is MIT,** the owner's choice, added just after the tag.
+  `v1.0.0` itself has no licence file. The tag was not moved: a
+  published tag that changes what it points to is worse than a note
+  saying what it lacks.
 
 Verified on the Mac (Apple clang 17, RelWithDebInfo): 170 of 170 tests
 pass. The code is that of step 11, which was verified in all six
@@ -1314,5 +1315,6 @@ Not verified:
     first benchmark run in step 9 and to a fuzz run in step 11. The
     benchmark runner and the soak test notice a sleep. The fuzzer does
     not: it reported an input as taking 933 seconds.
-42. **There is no licence file.** The repository is public, and without
-    a licence nobody else may reuse the code.
+42. *Resolved after step 12.* The repository is under the MIT licence.
+    The tag `v1.0.0` was made before the file was added and does not
+    contain it.
