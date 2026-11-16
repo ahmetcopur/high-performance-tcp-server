@@ -18,7 +18,7 @@ comparable.
 - [x] 9. Rebuild the benchmark suite
 - [x] 10. Profiling, then optimization
 - [x] 11. Reliability and fault injection
-- [ ] 12. Polish
+- [x] 12. Polish
 
 ## Environments
 
@@ -1114,6 +1114,73 @@ Not verified:
   stream target drives a `Connection` by hand.
 - **The server out of memory.**
 
+## Step 12: polish (2026-11-16)
+
+What changed: the README was rewritten around what a reader wants first,
+the documents were checked against the code, the repository was made
+public, and the result was tagged `v1.0.0`. Nothing in the server
+changed.
+
+- **README.** What the project is and what it is for, a diagram of the
+  two kinds of thread and what passes between them, the path of one
+  request, an index of the documents, how to build, test, run and
+  benchmark, the key results each with its environment and commit, the
+  design decisions with what each one costs, and the known limitations.
+  A CI badge.
+- **Documents checked against the code.**
+  - protocol.md: the four worked examples for ECHO, PING, COMPUTE and
+    ERROR were sent to the running server and came back byte for byte
+    as written. The STATS example has the documented length.
+  - The option tables in the README and in architecture.md were compared
+    with what the server prints for an unknown option: same names, same
+    defaults.
+  - architecture.md: one rule still said a response is "queued" where
+    since step 10 it is usually sent at once. Corrected. A section was
+    added, "The path of a request", that follows one request through
+    the loop and the pool as the code now does it.
+  - performance.md and reliability.md were written in steps 10 and 11
+    against the code as it is, and were read again.
+- **Checked before making the repository public.** The tracked files
+  hold no e-mail address, token or key. The brief and the `Claude
+  outputs/` folder were never committed. What becomes visible is the
+  commit author's address and the home directory path in the result
+  files of the Mac runs.
+
+Decisions:
+
+- **The history was left as it is.** The brief asks for a clean
+  history. It is already pushed, so cleaning it means rewriting it, and
+  the reverts and re-applications of step 10 are part of the evidence
+  for what was measured. Agreed with the owner.
+- **The repository is public.** Actions minutes for a private repository
+  ran out: macOS jobs are billed at ten times the rate of Linux ones,
+  and one push cost about 138 billed minutes, 120 of them for the three
+  macOS jobs. Public repositories are not billed for standard runners.
+  The owner's choice.
+- **The tag is `v1.0.0`.** The twelve steps of the brief are done, and
+  the protocol calls itself version 1.
+- **No licence file was added.** Which licence is the owner's decision
+  and has not been made. Without one, others may read the code and may
+  not reuse it.
+
+Verified on the Mac (Apple clang 17, RelWithDebInfo): 170 of 170 tests
+pass. The code is that of step 11, which was verified in all six
+configurations there.
+
+Verified in CI, GitHub Actions run 43780927509 on commit `06cd7f1`, the
+first run on the public repository: all seven jobs pass. The Ubuntu
+jobs run 189 tests, the macOS jobs 170, and the fuzz job tried
+46,348,260 inputs on the decoder and 171,903 on the stream target.
+
+Not verified:
+
+- **The documents line by line.** The worked examples, the option
+  tables and the statements that steps 10 and 11 changed were checked
+  against the code or the running server. The rest was read, not
+  tested.
+- **The diagram in the README** is a drawing of the design, checked by
+  reading it against the code.
+
 ## Open issues
 
 1. *Resolved in step 4.* Half-close works on macOS. `POLLHUP` is
@@ -1247,3 +1314,5 @@ Not verified:
     first benchmark run in step 9 and to a fuzz run in step 11. The
     benchmark runner and the soak test notice a sleep. The fuzzer does
     not: it reported an input as taking 933 seconds.
+42. **There is no licence file.** The repository is public, and without
+    a licence nobody else may reuse the code.
